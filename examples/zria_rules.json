@@ -1,0 +1,48 @@
+{
+  "version": "1",
+  "rules": [
+    {
+      "rule_id": "support-hotfix-overheating-escalate",
+      "branch": "support-hotfix",
+      "issue": "Overheating",
+      "outcome": {
+        "task": "evaluate",
+        "verdict": "escalate",
+        "resolved": false,
+        "should_escalate": true,
+        "explanation": "The support-hotfix branch escalates repeated overheating incidents."
+      }
+    },
+    {
+      "rule_id": "policy-review-refund-resolve",
+      "branch": "policy-review",
+      "issue": "hardware failure",
+      "outcome": {
+        "task": "evaluate",
+        "verdict": "resolved",
+        "resolved": true,
+        "should_escalate": false,
+        "explanation": "The policy-review branch approves hardware-failure refunds within the supported window."
+      }
+    },
+    {
+      "rule_id": "smoke-critical-escalate",
+      "keywords": ["smoke"],
+      "severity": "critical",
+      "outcome": {
+        "task": "evaluate",
+        "verdict": "escalate",
+        "resolved": false,
+        "should_escalate": true,
+        "explanation": "Safety-related incidents are escalated immediately."
+      }
+    }
+  ],
+  "default_outcome": {
+    "task": "evaluate",
+    "verdict": "insufficient_information",
+    "resolved": false,
+    "should_escalate": false,
+    "explanation": "The ZRIA backend did not find a matching policy rule for this case."
+  }
+}

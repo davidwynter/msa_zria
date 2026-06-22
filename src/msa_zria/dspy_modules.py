@@ -1,4 +1,6 @@
 # DSPy imports
+from typing import Any
+
 from dspy import Signature, InputField, OutputField, Module, Tool, PythonInterpreter
 
 
@@ -14,8 +16,9 @@ class ParseModule(Module):
 
     def prompt(self, text: str) -> str:
         return (
-            "[PARSE] Extract the 'device' and 'issue' from the following customer message. "
-            "Return a JSON object with keys 'device' and 'issue'.\n" +
+            "[PARSE] Extract the device, issue, cause, and severity from the following customer message. "
+            "Return JSON with keys: task, device, issue, cause, severity. "
+            "Set task='parse'. Use null when cause or severity is unknown.\n" +
             f"Message: {text}"
         )
 
@@ -44,16 +47,17 @@ class EvalModule(Module):
     """
     signature = Signature(
         inputs=[InputField(str, "query"), InputField(Any, "answer")],
-        outputs=OutputField(str, "evaluation")
+        outputs=OutputField(dict, "evaluation")
     )
 
     def prompt(self, query: str, answer: Any) -> str:
         return (
-            "[EVALUATE] Given the user query and model outcome, explain whether the outcome addresses the user's issue.\n" +
+            "[EVALUATE] Given the user query and model outcome, return JSON with keys "
+            "task, verdict, resolved, should_escalate, explanation. "
+            "Set task='evaluate'.\n" +
             f"Query: {query}\nOutcome: {answer}"
         )
         
         # DSPy Tools
 # Python interpreter to run generated code
 pyro_interpreter = PythonInterpreter()
-

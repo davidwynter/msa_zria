@@ -1,6 +1,20 @@
 experiment_name: msa-zria-gemma4-12b-v100
 seed: 42
 
+kg:
+  backend: wwkg
+  base_url: http://127.0.0.1:4242
+  workspace: urn:wwkg:workspace:example
+  branch: main
+
+zria:
+  backend: rules
+  rules_path: examples/zria_rules.json
+
+data:
+  train_path: examples/customer_support_records_train.jsonl
+  eval_path: examples/customer_support_records_eval.jsonl
+
 model:
   base_model_id: google/gemma-4-12B
   processor_id: google/gemma-4-12B-it
@@ -25,3 +39,7 @@ training:
   lora_alpha: 16
   lora_dropout: 0.05
   gradient_checkpointing: true
+
+ablation:
+  cases_path: examples/ablation_cases.jsonl
+  output_path: outputs/ablation_report_v100.json

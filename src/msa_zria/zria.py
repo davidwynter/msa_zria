@@ -1,368 +1,548 @@
-from huggingface_hub import login
-from google.colab import userdata
+from __future__ import annotations
 
-# Retrieve your secret API key
-HF_TOKEN = userdata.get('Hugging')
-
-# Log in to Hugging Face
-login(token=HF_TOKEN)
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
-import math
+import argparse
+import json
 import random
-import numpy as np
 import re
-from tqdm import tqdm
-from transformers import AutoProcessor, AutoModelForMultimodalLM
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-# Set random seed for reproducibility
-torch.manual_seed(42)
-np.random.seed(42)
-random.seed(42)
+from pydantic import BaseModel, ConfigDict, Field
 
-# =============================================================================
-# 1. Core ZRIA Architecture (As Provided)
-# =============================================================================
+from msa_zria.audit import AuditRecorder, event_report_id, sha256_directory, sha256_json, stable_dataset_version
+from msa_zria.config import KGScope
+from msa_zria.data import EvaluationCase, EvaluationResult, EvaluationTarget, ParseTarget, evaluate_case
 
-class FractalAttentionalResonance(nn.Module):
-    def __init__(self, dim, num_heads=4):
-        super().__init__()
-        self.dim, self.num_heads, self.head_dim = dim, num_heads, dim // num_heads
-        self.q_proj, self.k_proj, self.v_proj, self.out_proj = (nn.Linear(dim, dim), nn.Linear(dim, dim), nn.Linear(dim, dim), nn.Linear(dim, dim))
-        self.bias_generator = nn.Sequential(nn.Linear(dim, dim // 2), nn.ReLU(), nn.Linear(dim // 2, self.num_heads * self.head_dim))
+if TYPE_CHECKING:
+    import torch
 
-    def forward(self, x):
-        B, T, D = x.shape
-        global_context = x.mean(dim=1)
-        dynamic_bias = self.bias_generator(global_context).view(B, self.num_heads, self.head_dim)
-        Q, K, V = (p(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2) for p in (self.q_proj, self.k_proj, self.v_proj))
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / np.sqrt(self.head_dim)
-        bias = dynamic_bias.unsqueeze(-1)
-        fractal_resonance = torch.matmul(Q, bias)
-        scores = scores + fractal_resonance
-        attn_weights = F.softmax(scores, dim=-1)
-        context = torch.matmul(attn_weights, V).transpose(1, 2).contiguous().view(B, T, D)
-        return self.out_proj(context)
+_PAD = "<pad>"
+_UNK = "<unk>"
 
-class FAR_TransformerEncoderLayer(nn.Module):
-    def __init__(self, d_model, nhead, dim_feedforward, dropout=0.1):
-        super().__init__()
-        self.self_attn = FractalAttentionalResonance(d_model, nhead)
-        self.linear1 = nn.Linear(d_model, dim_feedforward)
-        self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(dim_feedforward, d_model)
-        self.norm1, self.norm2 = nn.LayerNorm(d_model), nn.LayerNorm(d_model)
-        self.dropout1, self.dropout2 = nn.Dropout(dropout), nn.Dropout(dropout)
-        self.activation = F.gelu
 
-    def forward(self, src):
-        src2 = self.self_attn(src)
-        src = src + self.dropout1(src2)
-        src = self.norm1(src)
-        src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
-        src = src + self.dropout2(src2)
-        src = self.norm2(src)
-        return src
+def _require_torch() -> tuple[Any, Any, Any]:
+    try:
+        import torch
+        from torch import nn
+        from torch.utils.data import DataLoader
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "The learned ZRIA backend requires torch to be installed."
+        ) from exc
+    return torch, nn, DataLoader
 
-class CustomTransformerEncoder(nn.Module):
-    def __init__(self, encoder_layer, num_layers):
-        super().__init__()
-        self.layers = nn.ModuleList([encoder_layer for _ in range(num_layers)])
 
-    def forward(self, src):
-        output = src
-        for mod in self.layers:
-            output = mod(output)
-        return output
+class ZRIAExample(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-# This is the P-FAF implementation
-class FractalEmbeddingLayer(nn.Module):
-    def __init__(self, dim, num_fractals=4):
-        super().__init__()
-        self.num_fractals, self.dim = num_fractals, dim
-        self.dims = nn.Parameter(torch.rand(num_fractals) * 2 + 1)
-        self.weight_generator = nn.Sequential(nn.Linear(dim, dim // 2), nn.ReLU(), nn.Linear(dim // 2, num_fractals))
-        self.fractal_functions = [lambda x: torch.sin(x*2*math.pi), lambda x: x-torch.floor(x), lambda x: 4*x*(1-x), lambda x: torch.sigmoid(5*(x-0.5))]
+    example_id: str
+    query: str
+    parsed: ParseTarget
+    target: EvaluationTarget
+    kg_scope: KGScope | None = None
 
-    def forward(self, x):
-        # The equation P-FAF(x) = ∑(p_i * f_i(x^(1/d_i))) is implemented here.
-        x_safe = torch.sigmoid(x) # Ensure input is in a stable range for fractal functions
-        # p_i: Probabilities are generated dynamically from the input
-        p_logits = self.weight_generator(x.mean(dim=1))
-        p_weights = F.softmax(p_logits, dim=-1).unsqueeze(1).unsqueeze(-1)
-        # f_i(x^(1/d_i)): Apply each fractal function to the scaled input
-        fractal_outputs = [f(torch.pow(x_safe, 1.0/d)).unsqueeze(-2) for d, f in zip(self.dims, self.fractal_functions)]
-        fractal_stack = torch.cat(fractal_outputs, dim=-2)
-        # ∑(...): The weighted sum is calculated
-        return x + torch.sum(p_weights * fractal_stack, dim=-2)
 
-class ZRIA_for_Reasoning(nn.Module):
-    """
-    The complete ZRIA model, adapted for the generative reasoning task.
-    """
-    def __init__(self, dim, vocab_size, max_seq_len=256):
-        super().__init__()
-        # Foundational Embeddings
-        self.token_embedding = nn.Embedding(vocab_size, dim)
-        self.positional_embedding = nn.Parameter(torch.randn(1, max_seq_len, dim))
-        self.fractal_embedding = FractalEmbeddingLayer(dim) # P-FAF Layer
+class ZRIALearnedArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-        # Core Encoders
-        far_encoder_layer = FAR_TransformerEncoderLayer(d_model=dim, nhead=4, dim_feedforward=dim*2)
-        self.encoder = CustomTransformerEncoder(far_encoder_layer, num_layers=2)
+    version: str = "1"
+    vocab: dict[str, int]
+    labels: list[EvaluationTarget]
+    max_length: int
+    embedding_dim: int
+    hidden_dim: int
+    state_dict_path: str
 
-        # ADJUSTMENT: A single generative head replaces the old classifier/regressor heads
-        self.decoder_head = nn.Linear(dim, vocab_size)
 
-    def forward(self, input_ids):
-        B, T = input_ids.shape
-        x = self.token_embedding(input_ids) + self.positional_embedding[:, :T, :]
-        pfaf_x = self.fractal_embedding(x) # Apply P-FAF
-        encoded_repr = self.encoder(pfaf_x)
-        logits = self.decoder_head(encoded_repr)
-        return logits
+class ZRIAComparisonDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-# =============================================================================
-# 2. Data Handling & Task Generation
-# =============================================================================
+    case_id: str
+    backend: str
+    confidence: float | None = None
+    predicted: EvaluationTarget
+    evaluation: EvaluationResult
 
-class ReasoningTokenizer:
-    """A word-level tokenizer for the reasoning task."""
-    def __init__(self, corpus):
-        self.special_tokens = ['<PAD>', '<UNK>', '<SOS>', '<EOS>']
-        all_words = set(word for sent in corpus for word in sent.lower().split())
-        self.vocab = self.special_tokens + sorted(list(all_words))
-        self.word_to_idx = {word: i for i, word in enumerate(self.vocab)}
-        self.idx_to_word = {i: word for i, word in enumerate(self.vocab)}
-        self.vocab_size = len(self.vocab)
-        self.pad_idx, self.sos_idx, self.eos_idx = 0, 2, 3
 
-    def encode(self, sentence, add_special_tokens=True):
-        tokens = [self.word_to_idx.get(word, self.word_to_idx['<UNK>']) for word in sentence.lower().split()]
-        if add_special_tokens:
-            return [self.sos_idx] + tokens + [self.eos_idx]
-        return tokens
+class ZRIAComparisonSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    def decode(self, token_ids):
-        return ' '.join([self.idx_to_word.get(idx, '<UNK>') for idx in token_ids if idx not in (self.pad_idx, self.sos_idx, self.eos_idx)])
+    backend: str
+    total_cases: int
+    passed_cases: int
+    accuracy: float
+    average_score: float
 
-class ReasoningDataset(Dataset):
-    def __init__(self, data, tokenizer, max_len=128):
-        self.data, self.tokenizer, self.max_len = data, tokenizer, max_len
 
-    def __len__(self):
-        return len(self.data)
+class ZRIAComparisonReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    def __getitem__(self, idx):
-        item = self.data[idx]
-        prompt_tokens = self.tokenizer.encode(item['prompt'], add_special_tokens=True)
-        answer_tokens = self.tokenizer.encode(item['action'] + " " + item['justification'], add_special_tokens=True)
+    summaries: list[ZRIAComparisonSummary]
+    details: list[ZRIAComparisonDetail]
 
-        enc_input = prompt_tokens[:self.max_len]
-        enc_input += [self.tokenizer.pad_idx] * (self.max_len - len(enc_input))
 
-        target = answer_tokens[:self.max_len]
-        target += [self.tokenizer.pad_idx] * (self.max_len - len(target))
+def load_zria_examples(path: str | Path) -> list[ZRIAExample]:
+    examples_path = Path(path)
+    examples: list[ZRIAExample] = []
+    with examples_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                examples.append(ZRIAExample.model_validate_json(line))
+    return examples
 
+
+def render_feature_text(
+    query: str,
+    parsed: ParseTarget,
+    kg_scope: KGScope | None = None,
+) -> str:
+    parts = [
+        f"query {query}",
+        f"device {parsed.device}",
+        f"issue {parsed.issue}",
+    ]
+    if parsed.cause:
+        parts.append(f"cause {parsed.cause}")
+    if parsed.severity:
+        parts.append(f"severity {parsed.severity}")
+    if kg_scope and kg_scope.workspace:
+        parts.append(f"workspace {kg_scope.workspace}")
+    if kg_scope and kg_scope.branch:
+        parts.append(f"branch {kg_scope.branch}")
+    if kg_scope and kg_scope.commit:
+        parts.append(f"commit {kg_scope.commit}")
+    return " ".join(parts)
+
+
+def tokenize(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9_:/.-]+", text.lower())
+
+
+def build_vocab(examples: list[ZRIAExample]) -> dict[str, int]:
+    vocab = {_PAD: 0, _UNK: 1}
+    for example in examples:
+        for token in tokenize(render_feature_text(example.query, example.parsed, example.kg_scope)):
+            if token not in vocab:
+                vocab[token] = len(vocab)
+    return vocab
+
+
+def build_label_set(examples: list[ZRIAExample]) -> list[EvaluationTarget]:
+    labels: list[EvaluationTarget] = []
+    seen: set[str] = set()
+    for example in examples:
+        key = json.dumps(example.target.model_dump(), sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        labels.append(example.target)
+    return labels
+
+
+def encode_text(text: str, vocab: dict[str, int], max_length: int) -> list[int]:
+    token_ids = [vocab.get(token, vocab[_UNK]) for token in tokenize(text)]
+    token_ids = token_ids[:max_length]
+    if len(token_ids) < max_length:
+        token_ids.extend([vocab[_PAD]] * (max_length - len(token_ids)))
+    return token_ids
+
+
+def label_index(target: EvaluationTarget, labels: list[EvaluationTarget]) -> int:
+    serialized = json.dumps(target.model_dump(), sort_keys=True)
+    for index, label in enumerate(labels):
+        if serialized == json.dumps(label.model_dump(), sort_keys=True):
+            return index
+    raise ValueError("Encountered target that is not present in the label set.")
+
+
+class _ZRIADataset:
+    def __init__(
+        self,
+        examples: list[ZRIAExample],
+        vocab: dict[str, int],
+        labels: list[EvaluationTarget],
+        max_length: int,
+    ) -> None:
+        self.examples = examples
+        self.vocab = vocab
+        self.labels = labels
+        self.max_length = max_length
+
+    def __len__(self) -> int:
+        return len(self.examples)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        torch, _, _ = _require_torch()
+        example = self.examples[index]
+        text = render_feature_text(example.query, example.parsed, example.kg_scope)
+        token_ids = encode_text(text, self.vocab, self.max_length)
+        attention_mask = [1 if token_id != self.vocab[_PAD] else 0 for token_id in token_ids]
         return {
-            "prompt_text": item['prompt'],
-            "answer_text": item['action'] + " " + item['justification'],
-            "encoder_input": torch.tensor(enc_input, dtype=torch.long),
-            "target_output": torch.tensor(target, dtype=torch.long),
-            "phase": item['phase'] # ✅ Add this line
+            "input_ids": torch.tensor(token_ids, dtype=torch.long),
+            "attention_mask": torch.tensor(attention_mask, dtype=torch.float32),
+            "label": torch.tensor(label_index(example.target, self.labels), dtype=torch.long),
         }
 
-def generate_test_case(phase):
-    # This function remains the same as before, generating varied test cases.
-    objects, colors, actions = [("A", "B"), ("C", "D")], [("red", "blue"), ("green", "yellow")], [("left", "right"), ("up", "down")]
-    obj1, obj2 = random.choice(objects)
-    color1, color2 = random.choice(colors)
-    action1, action2 = random.choice(actions)
-    if phase == "basic":
-        prompt = f"Facts: Object {obj1} is {color1}. Object {obj2} is {color2}. Rule: If Object {obj1} is {color1}, move Object {obj2} {action1}. Question: What should you do?"
-        action, justification = f"Move Object {obj2} {action1}.", f"The condition 'Object {obj1} is {color1}' was met."
-    elif phase == "contradiction":
-        prompt = f"Facts: Object {obj1} is {color1}. If Object {obj1} is {color1}, ignore the primary rule. Primary Rule: If Object {obj1} is {color1}, move Object {obj2} {action1}. Question: What should you do?"
-        action, justification = "Do nothing.", "The instruction to ignore the primary rule overrides the action rule."
-    elif phase == "recursive":
-        prompt = f"Facts: Object {obj1} is {color1}. Object {obj2} is {color2}. It is not raining. Rule: If Object {obj1} is {color1} and Object {obj2} is {color2}, and if it is not raining, then move Object {obj1} {action1} and {obj2} {action2}. Question: What should you do?"
-        action, justification = f"Move Object {obj1} {action1} and {obj2} {action2}.", "All conditions in the nested rule were met."
-    elif phase == "memory":
-        filler = "Intermediate Log: The sky is cloudy. Inventory logs were updated yesterday. System diagnostics show normal parameters."
-        prompt = f"Initial Facts: Object {obj1} is {color1}. If Object {obj1} is {color1}, move Object {obj2} {action1}. {filler} Question: Based on the initial facts, what action should be taken regarding Object {obj2}?"
-        action, justification = f"Move Object {obj2} {action1}.", f"The initial fact stated 'Object {obj1} is {color1}', triggering the rule."
-    return {"prompt": prompt, "action": action, "justification": justification, "phase": phase}
+
+def create_model(
+    vocab: dict[str, int],
+    labels: list[EvaluationTarget],
+    embedding_dim: int,
+    hidden_dim: int,
+) -> Any:
+    _, nn, _ = _require_torch()
+
+    class ZRIALearnedClassifier(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.embedding = nn.Embedding(len(vocab), embedding_dim, padding_idx=0)
+            self.classifier = nn.Sequential(
+                nn.Linear(embedding_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, len(labels)),
+            )
+
+        def forward(self, input_ids: Any, attention_mask: Any) -> Any:
+            embeddings = self.embedding(input_ids)
+            masked = embeddings * attention_mask.unsqueeze(-1)
+            pooled = masked.sum(dim=1) / attention_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+            return self.classifier(pooled)
+
+    return ZRIALearnedClassifier()
 
 
-# =============================================================================
-# 3. Model Training & Inference
-# =============================================================================
+def train_model(
+    train_examples: list[ZRIAExample],
+    output_dir: str | Path,
+    *,
+    eval_examples: list[ZRIAExample] | None = None,
+    epochs: int = 80,
+    learning_rate: float = 1e-2,
+    max_length: int = 64,
+    embedding_dim: int = 32,
+    hidden_dim: int = 64,
+    batch_size: int = 4,
+    seed: int = 42,
+) -> dict[str, Any]:
+    torch, nn, DataLoader = _require_torch()
+    torch.manual_seed(seed)
+    random.seed(seed)
 
-def train_zria_model(model, dataloader, epochs=15, device='cpu'):
-    model.to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=5e-4)
-    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=5, eta_min=1e-6)
-    criterion = nn.CrossEntropyLoss(ignore_index=dataloader.dataset.tokenizer.pad_idx)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
 
-    print("=== Starting ZRIA Training on Reasoning Task ===")
-    for epoch in range(epochs):
-        model.train()
-        total_loss = 0
-        for batch in tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}"):
-            # For this encoder-only architecture, we use the prompt as input and
-            # the full answer sequence as the target for every position.
-            encoder_input = batch['encoder_input'].to(device)
-            target_output = batch['target_output'].to(device) # Shape: [B, T_ans]
+    vocab = build_vocab(train_examples)
+    labels = build_label_set(train_examples)
+    model = create_model(vocab, labels, embedding_dim, hidden_dim)
+    dataset = _ZRIADataset(train_examples, vocab, labels, max_length)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    criterion = nn.CrossEntropyLoss()
 
-            # The model predicts a distribution over the vocab for each input token position.
-            logits = model(encoder_input) # Shape: [B, T_prompt, Vocab]
-
-            # We'll align the target to the prompt length for the loss calculation.
-            # This is a common strategy for encoder-only generative training.
-            T_prompt = logits.shape[1]
-            T_ans = target_output.shape[1]
-            aligned_target = F.pad(target_output, (0, max(0, T_prompt - T_ans)), value=dataloader.dataset.tokenizer.pad_idx)[:, :T_prompt]
-
-            loss = criterion(logits.view(-1, logits.size(-1)), aligned_target.view(-1))
-            if torch.isnan(loss): continue
-
+    model.train()
+    for _ in range(epochs):
+        for batch in dataloader:
+            logits = model(batch["input_ids"], batch["attention_mask"])
+            loss = criterion(logits, batch["label"])
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-            total_loss += loss.item()
-        scheduler.step()
-        print(f"Epoch {epoch+1}/{epochs} | Avg Loss: {total_loss / len(dataloader):.4f} | LR: {scheduler.get_last_lr()[0]:.6f}")
-    print("=== Training Complete ===")
 
-def zria_generate_answer(model, prompt, tokenizer, max_len=50, device='cpu'):
+    state_dict_path = output_path / "model.pt"
+    torch.save(model.state_dict(), state_dict_path)
+    artifact = ZRIALearnedArtifact(
+        vocab=vocab,
+        labels=labels,
+        max_length=max_length,
+        embedding_dim=embedding_dim,
+        hidden_dim=hidden_dim,
+        state_dict_path=str(state_dict_path),
+    )
+    with (output_path / "artifact.json").open("w", encoding="utf-8") as handle:
+        json.dump(artifact.model_dump(mode="json"), handle, indent=2)
+
+    metrics = {
+        "train_examples": len(train_examples),
+        "labels": len(labels),
+    }
+    if eval_examples:
+        report = evaluate_learned_backend(output_path, eval_examples)
+        metrics["eval_accuracy"] = report.summaries[0].accuracy
+    with (output_path / "metrics.json").open("w", encoding="utf-8") as handle:
+        json.dump(metrics, handle, indent=2)
+    return metrics
+
+
+def load_artifact(path: str | Path) -> tuple[ZRIALearnedArtifact, Any]:
+    torch, _, _ = _require_torch()
+    base_path = Path(path)
+    artifact_path = base_path if base_path.name.endswith(".json") else base_path / "artifact.json"
+    with artifact_path.open("r", encoding="utf-8") as handle:
+        artifact = ZRIALearnedArtifact.model_validate(json.load(handle))
+    state_dict_path = Path(artifact.state_dict_path)
+    if not state_dict_path.is_absolute():
+        state_dict_path = artifact_path.parent / state_dict_path.name
+    model = create_model(artifact.vocab, artifact.labels, artifact.embedding_dim, artifact.hidden_dim)
+    model.load_state_dict(torch.load(state_dict_path, map_location="cpu"))
     model.eval()
-    model.to(device)
-    prompt_tokens = torch.tensor(tokenizer.encode(prompt, add_special_tokens=True), dtype=torch.long).unsqueeze(0).to(device)
+    return artifact, model
+
+
+def predict_with_model(
+    artifact: ZRIALearnedArtifact,
+    model: Any,
+    query: str,
+    parsed: ParseTarget,
+    kg_scope: KGScope | None = None,
+) -> tuple[EvaluationTarget, float]:
+    torch, _, _ = _require_torch()
+    feature_text = render_feature_text(query, parsed, kg_scope)
+    input_ids = torch.tensor([encode_text(feature_text, artifact.vocab, artifact.max_length)], dtype=torch.long)
+    attention_mask = torch.tensor(
+        [[1 if token_id != artifact.vocab[_PAD] else 0 for token_id in input_ids[0].tolist()]],
+        dtype=torch.float32,
+    )
     with torch.no_grad():
-        logits = model(prompt_tokens)
-        # For an encoder-only model, we take the argmax at each output position.
-        # This is not auto-regressive but a direct generation based on the input states.
-        predicted_token_ids = torch.argmax(logits, dim=-1).squeeze(0).tolist()
-    return tokenizer.decode(predicted_token_ids)
+        logits = model(input_ids, attention_mask)
+        probabilities = torch.softmax(logits, dim=-1)
+    confidence, label_idx = torch.max(probabilities, dim=-1)
+    return artifact.labels[int(label_idx.item())], float(confidence.item())
 
-class Gemma_InferenceShell:
-    """Wrapper for Gemma that includes few-shot prompting."""
-    def __init__(self, model_name="google/gemma-4-12B-it"):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.torch_dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
-        print(f"Loading {model_name} on {self.device}...")
-        self.processor = AutoProcessor.from_pretrained(model_name)
-        self.model = AutoModelForMultimodalLM.from_pretrained(
-            model_name,
-            device_map="auto",
-            torch_dtype=self.torch_dtype,
+
+def evaluate_learned_backend(path: str | Path, examples: list[ZRIAExample]) -> ZRIAComparisonReport:
+    artifact, model = load_artifact(path)
+    details: list[ZRIAComparisonDetail] = []
+    for example in examples:
+        predicted, confidence = predict_with_model(
+            artifact,
+            model,
+            example.query,
+            example.parsed,
+            example.kg_scope,
         )
-        print("Gemma Model Loaded.")
-        self.few_shot_prompt_template = self._build_few_shot_template()
-
-    def _build_few_shot_template(self):
-        return """You are a precise, logical reasoning engine. Analyze the facts and rules to determine the correct action and provide a justification.
-
-**Example 1:**
-Facts: Object X is purple. If Object X is purple, ignore the primary rule. Primary Rule: If Object X is purple, move Object Y up. Question: What should you do?
-Answer:
-Do nothing. The instruction to ignore the primary rule overrides the action rule.
-
-**Example 2:**
-Facts: Object C is green. Object D is yellow. Rule: If Object C is green, move Object D forward. Question: What should you do?
-Answer:
-Move Object D forward. The condition 'Object C is green' was met.
-
----
-
-**Current Problem:**
-{problem}
-Answer:
-"""
-
-    def forward(self, prompt_text):
-        full_prompt = self.few_shot_prompt_template.format(problem=prompt_text)
-        messages = [{"role": "user", "content": full_prompt}]
-        prompt = self.processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=False,
+        evaluation = evaluate_case(
+            EvaluationCase(
+                case_id=example.example_id,
+                task="evaluate",
+                expected=example.target,
+                predicted=predicted,
+            )
         )
-        model_inputs = self.processor(text=prompt, return_tensors="pt").to(self.model.device)
-        outputs = self.model.generate(
-            **model_inputs,
-            max_new_tokens=60,
-            pad_token_id=self.processor.tokenizer.eos_token_id,
+        details.append(
+            ZRIAComparisonDetail(
+                case_id=example.example_id,
+                backend="learned",
+                confidence=confidence,
+                predicted=predicted,
+                evaluation=evaluation,
+            )
         )
-        prompt_length = model_inputs["input_ids"].shape[1]
-        generated_tokens = outputs[0][prompt_length:]
-        return self.processor.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
-
-# =============================================================================
-# 4. Main Execution & Benchmark
-# =============================================================================
-
-def run_benchmark(zria_model, gemma_shell, test_set, zria_tokenizer):
-    print("\n" + "="*50)
-    print("🔬 RUNNING BENCHMARK...")
-    print("="*50)
-
-    zria_results = []
-    gemma_results = []
-
-    for case in tqdm(test_set, desc="Benchmarking Models"):
-        # ZRIA Evaluation
-        zria_answer = zria_generate_answer(zria_model, case['prompt_text'], zria_tokenizer, device=zria_model.token_embedding.weight.device)
-        zria_correct = case['answer_text'].lower() in zria_answer.lower()
-        zria_results.append({"phase": case['phase'], "correct": zria_correct})
-
-        # Gemma Evaluation
-        gemma_answer = gemma_shell.forward(case['prompt_text'])
-        gemma_correct = case['answer_text'].lower() in gemma_answer.lower()
-        gemma_results.append({"phase": case['phase'], "correct": gemma_correct})
-
-    # Summarize
-    def summarize(results, model_name):
-        print(f"\n--- {model_name} Summary ---")
-        summary = {}
-        phases = sorted(list(set(r['phase'] for r in results)))
-        for phase in phases:
-            phase_results = [r['correct'] for r in results if r['phase'] == phase]
-            accuracy = sum(phase_results) / len(phase_results) if phase_results else 0
-            print(f"  Phase: {phase.title():<15} | Accuracy: {accuracy:.2%}")
-
-    summarize(zria_results, "ZRIA with P-FAF")
-    summarize(gemma_results, "Gemma-4-12B-IT")
+    passed_cases = sum(1 for detail in details if detail.evaluation.passed)
+    average_score = 0.0 if not details else sum(detail.evaluation.score for detail in details) / len(details)
+    return ZRIAComparisonReport(
+        summaries=[
+            ZRIAComparisonSummary(
+                backend="learned",
+                total_cases=len(details),
+                passed_cases=passed_cases,
+                accuracy=0.0 if not details else passed_cases / len(details),
+                average_score=average_score,
+            )
+        ],
+        details=details,
+    )
 
 
-if __name__ == '__main__':
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"Using device: {device}")
+def compare_backends(
+    *,
+    learned_model_path: str | Path,
+    rules_path: str | Path,
+    examples: list[ZRIAExample],
+    confidence_threshold: float = 0.6,
+) -> ZRIAComparisonReport:
+    from msa_zria.zria_backend import LearnedZRIABackend, RuleBasedZRIABackend
 
-    # 1. Generate Datasets
-    phases = ["basic", "recursive", "contradiction", "memory"]
-    train_data = [generate_test_case(p) for p in phases for _ in range(50)]
-    test_data = [generate_test_case(p) for p in phases for _ in range(10)]
-    corpus = [d['prompt'] + " " + d['action'] + " " + d['justification'] for d in train_data]
+    learned_artifact, learned_model = load_artifact(learned_model_path)
+    backends = [
+        (
+            "rules",
+            RuleBasedZRIABackend.from_path(rules_path),
+            None,
+        ),
+        (
+            "learned",
+            LearnedZRIABackend.from_path(
+                learned_model_path,
+                confidence_threshold=confidence_threshold,
+                fallback_backend=None,
+            ),
+            (learned_artifact, learned_model),
+        ),
+    ]
+    details: list[ZRIAComparisonDetail] = []
+    for backend_name, backend, learned_bundle in backends:
+        for example in examples:
+            predicted = backend.predict(example.query, parsed=example.parsed, kg_scope=example.kg_scope)
+            confidence = None
+            if backend_name == "learned":
+                artifact, model = learned_bundle
+                _, confidence = predict_with_model(artifact, model, example.query, example.parsed, example.kg_scope)
+            evaluation = evaluate_case(
+                EvaluationCase(
+                    case_id=example.example_id,
+                    task="evaluate",
+                    expected=example.target,
+                    predicted=predicted,
+                )
+            )
+            details.append(
+                ZRIAComparisonDetail(
+                    case_id=example.example_id,
+                    backend=backend_name,
+                    confidence=confidence,
+                    predicted=predicted,
+                    evaluation=evaluation,
+                )
+            )
 
-    # 2. Setup ZRIA
-    zria_tokenizer = ReasoningTokenizer(corpus)
-    zria_dataset = ReasoningDataset(train_data, zria_tokenizer)
-    zria_dataloader = DataLoader(zria_dataset, batch_size=8, shuffle=True)
-    zria_model = ZRIA_for_Reasoning(dim=128, vocab_size=zria_tokenizer.vocab_size, max_seq_len=128)
+    summaries: list[ZRIAComparisonSummary] = []
+    for backend_name in ["rules", "learned"]:
+        backend_details = [detail for detail in details if detail.backend == backend_name]
+        passed_cases = sum(1 for detail in backend_details if detail.evaluation.passed)
+        average_score = 0.0 if not backend_details else sum(
+            detail.evaluation.score for detail in backend_details
+        ) / len(backend_details)
+        summaries.append(
+            ZRIAComparisonSummary(
+                backend=backend_name,
+                total_cases=len(backend_details),
+                passed_cases=passed_cases,
+                accuracy=0.0 if not backend_details else passed_cases / len(backend_details),
+                average_score=average_score,
+            )
+        )
+    return ZRIAComparisonReport(summaries=summaries, details=details)
 
-    # 3. Train ZRIA
-    train_zria_model(zria_model, zria_dataloader, epochs=20, device=device)
 
-    # 4. Initialize Gemma
-    gemma_shell = Gemma_InferenceShell()
+def write_comparison_report(report: ZRIAComparisonReport, output_path: str | Path) -> None:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(report.model_dump(mode="json"), handle, indent=2)
 
-    # 5. Run Benchmark
-    test_dataset = ReasoningDataset(test_data, zria_tokenizer)
-    run_benchmark(zria_model, gemma_shell, test_dataset, zria_tokenizer)
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Train and evaluate the learned local ZRIA backend.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    train_parser = subparsers.add_parser("train")
+    train_parser.add_argument("--train", required=True, help="Path to ZRIA training examples JSONL.")
+    train_parser.add_argument("--output", required=True, help="Directory for learned ZRIA artifacts.")
+    train_parser.add_argument("--eval", help="Optional eval-set path.")
+    train_parser.add_argument("--epochs", type=int, default=80)
+    train_parser.add_argument("--learning-rate", type=float, default=1e-2)
+    train_parser.add_argument("--max-length", type=int, default=64)
+    train_parser.add_argument("--embedding-dim", type=int, default=32)
+    train_parser.add_argument("--hidden-dim", type=int, default=64)
+    train_parser.add_argument("--batch-size", type=int, default=4)
+    train_parser.add_argument("--seed", type=int, default=42)
+    train_parser.add_argument("--audit-path", help="Optional audit JSONL output path.")
+    train_parser.add_argument("--audit-wwkg", action="store_true")
+    train_parser.add_argument("--confidence-threshold", type=float, default=0.6)
+
+    eval_parser = subparsers.add_parser("evaluate")
+    eval_parser.add_argument("--model", required=True, help="Artifact directory or artifact.json path.")
+    eval_parser.add_argument("--input", required=True, help="Path to ZRIA eval examples JSONL.")
+    eval_parser.add_argument("--output", help="Optional JSON report path.")
+
+    compare_parser = subparsers.add_parser("compare")
+    compare_parser.add_argument("--model", required=True, help="Learned ZRIA artifact directory or artifact.json path.")
+    compare_parser.add_argument("--rules", required=True, help="Path to rules backend JSON.")
+    compare_parser.add_argument("--input", required=True, help="Path to ZRIA eval examples JSONL.")
+    compare_parser.add_argument("--output", help="Optional JSON report path.")
+    compare_parser.add_argument("--confidence-threshold", type=float, default=0.6)
+    compare_parser.add_argument("--audit-path", help="Optional audit JSONL output path.")
+    compare_parser.add_argument("--audit-wwkg", action="store_true")
+
+    args = parser.parse_args()
+
+    if args.command == "train":
+        train_examples = load_zria_examples(args.train)
+        eval_examples = load_zria_examples(args.eval) if args.eval else None
+        metrics = train_model(
+            train_examples,
+            args.output,
+            eval_examples=eval_examples,
+            epochs=args.epochs,
+            learning_rate=args.learning_rate,
+            max_length=args.max_length,
+            embedding_dim=args.embedding_dim,
+            hidden_dim=args.hidden_dim,
+            batch_size=args.batch_size,
+            seed=args.seed,
+        )
+        if args.audit_path:
+            recorder = AuditRecorder.from_output_path(args.audit_path, wwkg_enabled=args.audit_wwkg)
+            recorder.record_model_lineage(
+                experiment_config_hash=sha256_json(
+                    {
+                        "command": "zria_train",
+                        "epochs": args.epochs,
+                        "learning_rate": args.learning_rate,
+                        "max_length": args.max_length,
+                        "embedding_dim": args.embedding_dim,
+                        "hidden_dim": args.hidden_dim,
+                        "batch_size": args.batch_size,
+                        "seed": args.seed,
+                    }
+                ),
+                training_dataset_version=stable_dataset_version(
+                    [args.train, args.eval] if args.eval else [args.train]
+                ),
+                model_artifact_path=args.output,
+                model_artifact_hash=sha256_directory(args.output),
+                backend_type="learned",
+                fallback_setting=True,
+                confidence_threshold=args.confidence_threshold,
+            )
+        print(json.dumps(metrics, indent=2))
+        return
+
+    if args.command == "evaluate":
+        report = evaluate_learned_backend(args.model, load_zria_examples(args.input))
+        if args.output:
+            write_comparison_report(report, args.output)
+        print(report.model_dump_json(indent=2))
+        return
+
+    if args.command == "compare":
+        report = compare_backends(
+            learned_model_path=args.model,
+            rules_path=args.rules,
+            examples=load_zria_examples(args.input),
+            confidence_threshold=args.confidence_threshold,
+        )
+        if args.output:
+            write_comparison_report(report, args.output)
+        if args.audit_path:
+            recorder = AuditRecorder.from_output_path(args.audit_path, wwkg_enabled=args.audit_wwkg)
+            recorder.record_validation_evidence(
+                report_id=event_report_id(report.model_dump(mode="json")),
+                evidence_type="learned_vs_rules_comparison",
+                per_backend_scores={
+                    summary.backend: {
+                        "total_cases": summary.total_cases,
+                        "passed_cases": summary.passed_cases,
+                        "accuracy": summary.accuracy,
+                        "average_score": summary.average_score,
+                    }
+                    for summary in report.summaries
+                },
+                artifact_path=args.output,
+                learned_vs_rules_report=report.model_dump(mode="json"),
+            )
+        print(report.model_dump_json(indent=2))
+
+
+if __name__ == "__main__":
+    main()
