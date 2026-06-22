@@ -9,11 +9,14 @@ description = "Gemma 4 12B scaffold for MSA, ZRIA, and Pyro reasoning experiment
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "accelerate>=1.0.0",
   "bitsandbytes>=0.48.1",
+  "datasets>=3.0.0",
   "peft>=0.19.0",
   "pydantic>=2.11.0",
   "pyyaml>=6.0.2",
-  "transformers>=5.10.1",
+  "ray[tune]>=2.0.0",
+  "transformers>=4.57.0",
   "trl>=0.25.0",
 ]
 

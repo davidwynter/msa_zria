@@ -1,4 +1,4 @@
-experiment_name: msa-zria-gemma4-12b
+experiment_name: msa-zria-gemma4-12b-a770
 seed: 42
 
 model:
@@ -10,17 +10,18 @@ model:
   prepare_for_kbit_training: true
 
 training:
-  output_dir: outputs/gemma4_12b
-  accelerator: auto
+  output_dir: outputs/gemma4_12b_a770
+  accelerator: xpu
   learning_rate: 2.0e-4
   num_train_epochs: 3
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
   gradient_accumulation_steps: 16
-  max_length: 2048
+  max_length: 1024
   logging_steps: 10
   save_strategy: epoch
   eval_strategy: epoch
   lora_r: 16
   lora_alpha: 16
   lora_dropout: 0.05
+  gradient_checkpointing: true

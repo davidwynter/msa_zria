@@ -35,10 +35,13 @@ class DatasetConfig(BaseModel):
 class FineTuneConfig(BaseModel):
     dataset_path: str
     output_dir: str
+    accelerator: str = "auto"
+    load_in_4bit: bool = True
     epochs: int = 3
     lora_r: int = 16
     learning_rate: float = 2e-4
     batch_size: int = 1
+    gradient_checkpointing: bool = True
     seed: int = 42
 
 class InferenceRequest(BaseModel):
@@ -88,7 +91,7 @@ def produce_dataset(cfg: DatasetConfig):
 
 # ------------------------ Inference and MSA Endpoints ------------------------
 # Load fine-tuned LM for inference in DSPy modules
-LM_PATH = os.getenv('LM_PATH', 'outputs/llama2-finetune')
+LM_PATH = os.getenv('LM_PATH', 'outputs/gemma4_12b')
 llm = dspy.LM(model=LM_PATH)
 
 # Instantiate DSPy modules with the loaded LM
@@ -136,8 +139,10 @@ def inference(req: InferenceRequest):
         raise HTTPException(status_code=400, detail="Invalid mode")
 
 @app.post("/fine_tune")
-def fine_tune(cfg: FineTuneConfig):
-    return fine_tune(cfg)
+def fine_tune_endpoint(cfg: FineTuneConfig):
+    from msa_zria.fine_tuning import fine_tune as run_fine_tune
+
+    return run_fine_tune(cfg)
 
 # Placeholder ZRIA function
 def zria_predict(query: str) -> bool:

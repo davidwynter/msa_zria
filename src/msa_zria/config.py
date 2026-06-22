@@ -21,6 +21,7 @@ class TrainingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     output_dir: str = "outputs/gemma4_12b"
+    accelerator: str = "auto"
     learning_rate: float = 2e-4
     num_train_epochs: int = 3
     per_device_train_batch_size: int = 1
@@ -33,6 +34,7 @@ class TrainingConfig(BaseModel):
     lora_r: int = 16
     lora_alpha: int = 16
     lora_dropout: float = 0.05
+    gradient_checkpointing: bool = True
     report_to: str = "none"
     remove_unused_columns: bool = False
     skip_prepare_dataset: bool = True

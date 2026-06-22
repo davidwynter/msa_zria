@@ -18,7 +18,7 @@ import random
 import numpy as np
 import re
 from tqdm import tqdm
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoProcessor, AutoModelForMultimodalLM
 
 # Set random seed for reproducibility
 torch.manual_seed(42)
@@ -253,11 +253,16 @@ def zria_generate_answer(model, prompt, tokenizer, max_len=50, device='cpu'):
 
 class Gemma_InferenceShell:
     """Wrapper for Gemma that includes few-shot prompting."""
-    def __init__(self, model_name="google/gemma-2b-it"):
+    def __init__(self, model_name="google/gemma-4-12B-it"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.torch_dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
         print(f"Loading {model_name} on {self.device}...")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", torch_dtype=torch.bfloat16)
+        self.processor = AutoProcessor.from_pretrained(model_name)
+        self.model = AutoModelForMultimodalLM.from_pretrained(
+            model_name,
+            device_map="auto",
+            torch_dtype=self.torch_dtype,
+        )
         print("Gemma Model Loaded.")
         self.few_shot_prompt_template = self._build_few_shot_template()
 
@@ -283,10 +288,21 @@ Answer:
 
     def forward(self, prompt_text):
         full_prompt = self.few_shot_prompt_template.format(problem=prompt_text)
-        input_ids = self.tokenizer(full_prompt, return_tensors="pt").to(self.device)
-        outputs = self.model.generate(**input_ids, max_new_tokens=60, pad_token_id=self.tokenizer.eos_token_id)
-        result = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return result.replace(full_prompt.replace('{problem}', prompt_text), "").strip()
+        messages = [{"role": "user", "content": full_prompt}]
+        prompt = self.processor.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        model_inputs = self.processor(text=prompt, return_tensors="pt").to(self.model.device)
+        outputs = self.model.generate(
+            **model_inputs,
+            max_new_tokens=60,
+            pad_token_id=self.processor.tokenizer.eos_token_id,
+        )
+        prompt_length = model_inputs["input_ids"].shape[1]
+        generated_tokens = outputs[0][prompt_length:]
+        return self.processor.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
 
 # =============================================================================
 # 4. Main Execution & Benchmark
@@ -322,7 +338,7 @@ def run_benchmark(zria_model, gemma_shell, test_set, zria_tokenizer):
             print(f"  Phase: {phase.title():<15} | Accuracy: {accuracy:.2%}")
 
     summarize(zria_results, "ZRIA with P-FAF")
-    summarize(gemma_results, "Gemma-2B-IT")
+    summarize(gemma_results, "Gemma-4-12B-IT")
 
 
 if __name__ == '__main__':
