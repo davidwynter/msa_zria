@@ -1,7 +1,7 @@
 # msa_zria
 Combining the MSA research with the ZRIA reasoning model.
 
-Thank you for the clarification. I will now begin a comprehensive research task to address the following:
+This research task is to address the following:
 
 1. Optimal stack for training LLaMA-2 14B on a single GPU, supporting both knowledge graph triples and natural language representations for fine-tuning.
 2. Code generation for dataset preparation and fine-tuning of the LLaMA-2 model using both triple-form and NL-form inputs.
