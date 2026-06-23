@@ -39,6 +39,7 @@ from msa_zria.ingest import (
 from msa_zria.kg import kg_context_metadata, load_triples
 from msa_zria.pyro_runtime import PyroExecutionResult, execute_pyro_program
 from msa_zria.reasoning_pipeline import PipelineResult, ReasoningPipeline
+from msa_zria.validate_contracts import ContractValidationDetail, ContractValidationReport, ContractValidationSummary, validate_contracts
 from msa_zria.zria import (
     ZRIAComparisonDetail,
     ZRIAComparisonReport,
@@ -86,6 +87,9 @@ __all__ = [
     "BaseZRIABackend",
     "CodeTarget",
     "ConfiguredZRIAAdapter",
+    "ContractValidationDetail",
+    "ContractValidationReport",
+    "ContractValidationSummary",
     "CustomerSupportCase",
     "DatasetRecord",
     "ExperimentConfig",
@@ -136,6 +140,7 @@ __all__ = [
     "stable_dataset_version",
     "train_zria_model",
     "train_from_config",
+    "validate_contracts",
     "write_ablation_report",
     "write_jsonl_records",
     "ZRIABundle",

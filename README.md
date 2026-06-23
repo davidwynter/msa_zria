@@ -1,12 +1,39 @@
 # msa_zria
 
-`msa_zria` is now scoped as a Gemma-first implementation scaffold for combining:
+`msa_zria` combines:
 
 - MSA-style LLM parsing and model synthesis
 - ZRIA symbolic reasoning
 - Pyro-based probabilistic execution
 
-The previous repository state was written around `LLaMA-2-14B`. There was no dataset builder, and no Gemma-compatible training path. This update changes the target model to **Gemma 4 12B Unified** and adds the minimum Python structure needed to start implementing the pipeline.
+## What MSA And ZRIA Mean Here
+
+We implement Model Synthesis Architecture (MSA) from arxiv paper 2507.12547v1. The code defines `MSA` as a staged reasoning workflow built around three typed steps:
+
+- `parse` into a [ParseTarget](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/data.py:38)
+- `code` into a [CodeTarget](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/data.py:48)
+- `evaluate` into an [EvaluationTarget](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/data.py:60)
+
+That workflow is executed by the [ReasoningPipeline](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/reasoning_pipeline.py:42), which runs:
+
+1. query parsing
+2. reasoning-program synthesis
+3. controlled Pyro execution
+4. final evaluation
+
+So in this repository, `MSA` means a multi-stage LLM-assisted reasoning loop with explicit intermediate contracts rather than a single free-form model response.
+
+The code defines `ZRIA` as a separate decision backend layer behind the [BaseZRIAAdapter](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/zria_adapter.py:11) and [BaseZRIABackend](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/zria_backend.py:21) interfaces.
+
+`ZRIA` can run through three backend types:
+
+- `rules`: explicit rule matching over query text, parsed state, and KG scope
+- `learned`: a local trained classifier with confidence-based fallback
+- `remote`: an external service client with fallback
+
+Each backend returns an `EvaluationTarget`, and the trace model records which backend was configured, which backend actually produced the answer, and whether fallback fired.
+
+So in this repository, `ZRIA` means the structured decision layer that can answer a case directly through rules, a learned local model, or a remote service, independently of the Pyro path.
 
 ## What msa_zria Can Solve
 
@@ -211,9 +238,9 @@ After deployment, capture:
 
 Those records become the next round of supervised data, which is how the system should improve over time.
 
-## Migration Target
+## Model Target
 
-This repository now targets:
+This repository targets:
 
 - Base model: `google/gemma-4-12B`
 - Processor template source: `google/gemma-4-12B-it`
@@ -221,14 +248,13 @@ This repository now targets:
 
 Why this model:
 
-- It is the closest size match to the old single-model plan, but materially more current.
 - It is positioned for reasoning, coding, and agentic workflows.
 - It supports long context and modern chat/system-role formatting.
-- It keeps the repo aligned with Google’s current Gemma 4 documentation instead of legacy Gemma 1/2/3 or LLaMA-specific assumptions.
+- It aligns the repository with the Gemma 4 model family and instruction processor.
 
-## What Was Added
+## Current Capabilities
 
-This repository now includes the core scaffold pieces needed to exercise the full `msa_zria` loop:
+The repository includes the core pieces needed to exercise the full `msa_zria` loop:
 
 - typed experiment configuration
 - WWKG branch/workspace context in the experiment config
@@ -282,7 +308,7 @@ msa_zria/
 
 ### 1. Use `AutoModelForMultimodalLM`
 
-Gemma 4 12B is not treated here like an older text-only decoder. Even if your first workload is text-only, the correct loading path is the multimodal Gemma 4 stack:
+Gemma 4 12B uses the multimodal Gemma 4 stack even when the current workload is text-only:
 
 ```python
 from transformers import AutoModelForMultimodalLM, AutoProcessor
@@ -296,9 +322,9 @@ Gemma 4 uses an official processor and chat template. This is the right place to
 
 The project goal mentions customer support parsing, code synthesis, and evaluation. Those can all start as text tasks even though Gemma 4 12B also supports image and audio inputs.
 
-### 4. Keep the scaffold narrow
+### 4. Keep the implementation narrow
 
-This repo now includes a narrow working slice, not a full production platform. The goal is to make each stage concrete and testable without pretending the domain logic, retrieval layer, or ZRIA implementation are complete.
+This repo includes a narrow working slice, not a full production platform. The goal is to make each stage concrete and testable without pretending the domain logic, retrieval layer, or ZRIA implementation are complete.
 
 ## Quick Start
 
@@ -391,6 +417,21 @@ Run the integration tests:
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
+Run the repo CI-equivalent locally:
+
+```bash
+./scripts/run_ci.sh
+```
+
+Run the live WWKG checks once WWKG is available:
+
+```bash
+WWKG_BASE_URL=http://127.0.0.1:4242 \
+WWKG_WORKSPACE=urn:wwkg:workspace:example \
+WWKG_BRANCH=main \
+./scripts/run_live_wwkg_checks.sh
+```
+
 ## Config Model
 
 The example config separates model and training concerns:
@@ -410,7 +451,7 @@ training:
   gradient_accumulation_steps: 16
 ```
 
-The config now also includes:
+The config also includes:
 
 - `kg.backend`
 - `kg.workspace`
@@ -436,7 +477,7 @@ The config now also includes:
 
 ### KG Context
 
-`msa_zria` is now branch/workspace-aware through a shared KG context model.
+`msa_zria` is branch/workspace-aware through a shared KG context model.
 
 That context can be carried through:
 
@@ -456,7 +497,7 @@ kg:
   branch: main
 ```
 
-If you want the old local-file graph path instead, set:
+To use a local-file graph path instead, set:
 
 ```yaml
 kg:
@@ -467,7 +508,7 @@ kg:
 
 ## Audit and Lineage
 
-`msa_zria` now has a first-class audit trail with local JSONL output and an optional WWKG mirror.
+`msa_zria` has a first-class audit trail with local JSONL output and an optional WWKG mirror.
 
 The audit surface covers:
 
@@ -502,6 +543,29 @@ python -m msa_zria.audit promote \
   --evidence-report-id ablation-report-20260622
 ```
 
+## Contract Validation
+
+`msa_zria` includes a contract-validation CLI for the parse -> code -> Pyro -> evaluate slice.
+
+Use the baseline heuristic modules:
+
+```bash
+python -m msa_zria.validate_contracts \
+  --input examples/customer_support_cases.jsonl \
+  --module-source baseline \
+  --output outputs/contract_validation.json
+```
+
+Use the default Gemma-backed modules when the runtime is installed and `LM_PATH` is set:
+
+```bash
+LM_PATH=outputs/gemma4_12b \
+python -m msa_zria.validate_contracts \
+  --input examples/customer_support_cases.jsonl \
+  --module-source default \
+  --output outputs/contract_validation_gemma.json
+```
+
 ## Dataset Formatting
 
 `src/msa_zria/data.py` supports three input modes:
@@ -510,7 +574,7 @@ python -m msa_zria.audit promote \
 - `text`
 - `hybrid`
 
-That maps directly to the research intent already described in the original README:
+This maps to three supported dataset presentations:
 
 - structured triples only
 - natural language only
@@ -526,7 +590,7 @@ This keeps the dataset compatible with modern supervised fine-tuning pipelines a
 
 ### Canonical Dataset Shape
 
-The repository now has a concrete canonical training record shape. Each JSONL row should map to a `DatasetRecord` with:
+The repository has a concrete canonical training record shape. Each JSONL row should map to a `DatasetRecord` with:
 
 ```json
 {
@@ -570,7 +634,7 @@ The allowed target contracts are:
 - `evaluate`
   - `verdict`, `resolved`, `should_escalate`, `explanation`
 
-This is the dataset shape the rest of the repo should now treat as canonical.
+This is the dataset shape the rest of the repo should treat as canonical.
 
 ### Source Case Ingestion Shape
 
@@ -590,7 +654,7 @@ See [customer_support_cases.jsonl](/home/david-wynter/yambina_dev/tools/msa_zria
 
 ### Evaluation Contract
 
-Evaluation is now defined as a deterministic contract instead of a vague natural-language judgment.
+Evaluation is defined as a deterministic contract instead of a vague natural-language judgment.
 
 `src/msa_zria/data.py` provides:
 
@@ -614,7 +678,7 @@ This gives the project a stable pass/fail contract for offline benchmarks and re
 
 ## Training Entry Point
 
-The training path is now implemented in [train.py](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/train.py).
+The training path is implemented in [train.py](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/train.py).
 
 It does the following:
 
@@ -641,7 +705,7 @@ It validates the generated AST, restricts imports and builtins, executes in a se
 
 ## ZRIA Adapter
 
-The ZRIA integration point is now explicit in [zria_adapter.py](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/zria_adapter.py):
+The ZRIA integration point is defined in [zria_adapter.py](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/zria_adapter.py):
 
 - `BaseZRIAAdapter`
 - `ConfiguredZRIAAdapter`
@@ -700,12 +764,12 @@ The CLI entrypoint reads `ablation.cases_path` and `ablation.output_path` from `
 python -m msa_zria.ablation --config configs/gemma4_12b.yaml
 ```
 
-Today that runner uses a narrow baseline parse/code/evaluate pipeline plus the rule-backed ZRIA adapter, so the report path is runnable before a real DSPy-backed Gemma inference stack is wired in.
+The runner uses a narrow baseline parse/code/evaluate pipeline plus the rule-backed ZRIA adapter, so the report path is runnable before a real DSPy-backed Gemma inference stack is wired in.
 It also carries the configured WWKG scope into the report metadata so branch-level comparisons can be tracked explicitly.
 
 ## Gemma 4 12B Loading Notes
 
-The model-loading scaffold does the following:
+The model-loading path does the following:
 
 - selects the accelerator explicitly: `cuda`, `xpu`, or `auto`
 - uses `bfloat16` on newer CUDA GPUs when available, `float16` on V100 and Intel Arc
@@ -718,7 +782,7 @@ The LoRA config intentionally does **not** hardcode target modules. Current Gemm
 
 ## 16GB GPU Profiles
 
-The fine-tuning stage now has separate accelerator-aware profiles for both of your planned cards:
+The fine-tuning stage has separate accelerator-aware profiles for both of your planned cards:
 
 - [configs/gemma4_12b_a770.yaml](/home/david-wynter/yambina_dev/tools/msa_zria/configs/gemma4_12b_a770.yaml)
 - [configs/gemma4_12b_v100.yaml](/home/david-wynter/yambina_dev/tools/msa_zria/configs/gemma4_12b_v100.yaml)
@@ -733,7 +797,7 @@ For Intel GPU runs, make sure the environment exposes `torch.xpu`; upstream Inte
 
 ## Remaining Gaps
 
-The large missing pieces are now reduced to runtime quality and domain depth rather than missing scaffolding:
+The large missing pieces are runtime quality and domain depth rather than missing scaffolding:
 
 - real DSPy runtime validation against installed dependencies
 - higher-quality learned ZRIA datasets and model tuning beyond the small local classifier scaffold
@@ -745,6 +809,6 @@ The large missing pieces are now reduced to runtime quality and domain depth rat
 
 ## Notes
 
-- The project is now updated to Gemma 4 12B assumptions.
-- It is still intentionally a scaffold, not a finished reasoning system.
-- The next useful milestone is a runnable training command, not more architecture prose.
+- The project targets Gemma 4 12B assumptions.
+- It is intentionally a scaffold, not a finished reasoning system.
+- The next useful milestone is stronger runtime validation and production hardening.
