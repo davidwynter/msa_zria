@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from msa_zria.config import KGScope, ZRIAConfig
+from msa_zria.config import KGConfig, KGScope, ZRIAConfig
 from msa_zria.data import EvaluationTarget, ParseTarget
 from msa_zria.zria_backend import BaseZRIABackend, RuleBasedZRIABackend, ZRIAPredictionTrace, load_zria_backend
 
@@ -33,8 +33,8 @@ class ConfiguredZRIAAdapter(BaseZRIAAdapter):
         self.backend = backend
 
     @classmethod
-    def from_config(cls, config: ZRIAConfig) -> "ConfiguredZRIAAdapter":
-        return cls(load_zria_backend(config))
+    def from_config(cls, config: ZRIAConfig, kg_config: KGConfig | None = None) -> "ConfiguredZRIAAdapter":
+        return cls(load_zria_backend(config, kg_config=kg_config))
 
     def predict(
         self,

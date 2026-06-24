@@ -121,7 +121,7 @@ def _default_zria_adapter() -> BaseZRIAAdapter:
     config_path = os.getenv("MSA_ZRIA_CONFIG")
     if config_path and Path(config_path).exists():
         experiment_config = load_experiment_config(config_path)
-        return ConfiguredZRIAAdapter.from_config(experiment_config.zria)
+        return ConfiguredZRIAAdapter.from_config(experiment_config.zria, experiment_config.kg)
     return ConfiguredZRIAAdapter.from_config(ZRIAConfig())
 
 

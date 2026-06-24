@@ -65,10 +65,12 @@ class KGConfig(KGScope):
 class ZRIAConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    backend: Literal["rules", "learned", "remote"] = "rules"
+    backend: Literal["rules", "learned", "learned_graph", "remote"] = "rules"
     rules_path: str = "examples/zria_rules.json"
     learned_model_path: str = "outputs/zria_learned"
+    learned_graph_model_path: str = "outputs/zria_graph_learned"
     confidence_threshold: float = 0.6
+    graph_neighborhood_limit: int = 64
     remote_url: str | None = None
     remote_api_key: str | None = None
     remote_timeout_seconds: float = 10.0

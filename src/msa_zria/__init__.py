@@ -36,7 +36,7 @@ from msa_zria.ingest import (
     ingest_customer_support_cases,
     load_customer_support_cases,
 )
-from msa_zria.kg import kg_context_metadata, load_triples
+from msa_zria.kg import kg_context_metadata, load_triples, retrieve_neighborhood
 from msa_zria.pyro_runtime import PyroExecutionResult, execute_pyro_program
 from msa_zria.reasoning_pipeline import PipelineResult, ReasoningPipeline
 from msa_zria.validate_contracts import ContractValidationDetail, ContractValidationReport, ContractValidationSummary, validate_contracts
@@ -45,14 +45,20 @@ from msa_zria.zria import (
     ZRIAComparisonReport,
     ZRIAComparisonSummary,
     ZRIAExample,
+    ZRIAGraphEvidence,
+    ZRIASweepRecord,
+    ZRIASweepReport,
     compare_backends,
     evaluate_learned_backend,
     load_zria_examples,
+    run_sweep,
+    train_graph_model,
     train_model as train_zria_model,
 )
 from msa_zria.zria_adapter import BaseZRIAAdapter, ConfiguredZRIAAdapter, HeuristicZRIAAdapter, RuleBasedZRIAAdapter
 from msa_zria.zria_backend import (
     BaseZRIABackend,
+    LearnedGraphZRIABackend,
     LearnedZRIABackend,
     RemoteZRIABackend,
     RuleBasedZRIABackend,
@@ -99,6 +105,7 @@ __all__ = [
     "HeuristicZRIAAdapter",
     "KGConfig",
     "KGScope",
+    "LearnedGraphZRIABackend",
     "LearnedZRIABackend",
     "RuleBasedZRIABackend",
     "RuleBasedZRIAAdapter",
@@ -114,6 +121,9 @@ __all__ = [
     "ZRIAComparisonReport",
     "ZRIAComparisonSummary",
     "ZRIAExample",
+    "ZRIAGraphEvidence",
+    "ZRIASweepRecord",
+    "ZRIASweepReport",
     "build_baseline_pipeline",
     "build_lora_config",
     "build_sft_config",
@@ -132,13 +142,16 @@ __all__ = [
     "load_triples",
     "load_zria_examples",
     "load_zria_backend",
+    "retrieve_neighborhood",
     "run_ablation",
+    "run_sweep",
     "sha256_directory",
     "sha256_file",
     "sha256_json",
     "sha256_text",
     "stable_dataset_version",
     "train_zria_model",
+    "train_graph_model",
     "train_from_config",
     "validate_contracts",
     "write_ablation_report",

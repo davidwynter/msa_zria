@@ -278,7 +278,7 @@ def main() -> None:
     report = run_ablation(
         cases,
         pipeline,
-        ConfiguredZRIAAdapter.from_config(config.zria),
+        ConfiguredZRIAAdapter.from_config(config.zria, config.kg),
         kg_scope=KGScope(
             workspace=config.kg.workspace,
             branch=config.kg.branch,

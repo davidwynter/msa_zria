@@ -6,7 +6,7 @@ from typing import Any
 from urllib import error, parse, request
 
 from msa_zria.config import KGConfig, KGScope
-from msa_zria.data import Triple
+from msa_zria.data import ParseTarget, Triple
 
 
 def load_triples(config: KGConfig) -> list[Triple]:
@@ -21,6 +21,23 @@ def kg_context_metadata(scope: KGScope | KGConfig | None) -> dict[str, str]:
     if scope is None:
         return {}
     return scope.to_metadata()
+
+
+def retrieve_neighborhood(
+    config: KGConfig,
+    query: str,
+    parsed: ParseTarget | None,
+    *,
+    limit: int = 64,
+) -> list[Triple]:
+    terms = _candidate_terms(query, parsed)
+    if not terms:
+        return []
+    if config.backend == "oxigraph":
+        return _retrieve_neighborhood_from_oxigraph(config, terms, limit=limit)
+    if config.backend == "wwkg":
+        return _retrieve_neighborhood_from_wwkg(config, terms, limit=limit)
+    raise ValueError(f"Unsupported KG backend '{config.backend}'.")
 
 
 def _load_triples_from_oxigraph(config: KGConfig) -> list[Triple]:
@@ -59,6 +76,97 @@ def _load_triples_from_wwkg(config: KGConfig) -> list[Triple]:
             )
         )
     return triples
+
+
+def _retrieve_neighborhood_from_oxigraph(
+    config: KGConfig,
+    terms: list[str],
+    *,
+    limit: int,
+) -> list[Triple]:
+    triples = load_triples(config)
+    matches: list[Triple] = []
+    lowered_terms = [term.lower() for term in terms]
+    for triple in triples:
+        haystack = f"{triple.subject} {triple.predicate} {triple.object}".lower()
+        if any(term in haystack for term in lowered_terms):
+            matches.append(triple)
+            if len(matches) >= limit:
+                break
+    return matches
+
+
+def _retrieve_neighborhood_from_wwkg(
+    config: KGConfig,
+    terms: list[str],
+    *,
+    limit: int,
+) -> list[Triple]:
+    payload = _wwkg_query(config, _neighborhood_query(config, terms, limit=limit))
+    if not isinstance(payload, dict):
+        raise RuntimeError("WWKG returned a non-JSON payload for a neighborhood query.")
+
+    bindings = payload.get("results", {}).get("bindings", [])
+    return [
+        Triple(
+            subject=_binding_value(row, "subject"),
+            predicate=_binding_value(row, "predicate"),
+            object=_binding_value(row, "object"),
+        )
+        for row in bindings
+    ]
+
+
+def _candidate_terms(query: str, parsed: ParseTarget | None) -> list[str]:
+    candidates: list[str] = []
+    if parsed is not None:
+        candidates.extend([parsed.device, parsed.issue])
+        if parsed.cause:
+            candidates.append(parsed.cause)
+        if parsed.severity:
+            candidates.append(parsed.severity)
+    candidates.extend(query.split())
+
+    terms: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        term = raw.strip().lower()
+        if len(term) < 3:
+            continue
+        if term in seen:
+            continue
+        seen.add(term)
+        terms.append(term)
+        if len(terms) >= 8:
+            break
+    return terms
+
+
+def _neighborhood_query(config: KGConfig, terms: list[str], *, limit: int) -> str:
+    filters = [
+        (
+            f"CONTAINS(LCASE(STR(?subject)), {_sparql_string(term)}) || "
+            f"CONTAINS(LCASE(STR(?predicate)), {_sparql_string(term)}) || "
+            f"CONTAINS(LCASE(STR(?object)), {_sparql_string(term)})"
+        )
+        for term in terms
+    ]
+    graph_clause_open = ""
+    graph_clause_close = ""
+    if config.graph_iri:
+        graph_clause_open = f"GRAPH <{config.graph_iri}> {{ "
+        graph_clause_close = " }"
+    return (
+        "SELECT ?subject ?predicate ?object WHERE { "
+        f"{graph_clause_open}?subject ?predicate ?object . "
+        f"FILTER ({' || '.join(filters)})"
+        f"{graph_clause_close} "
+        f"}} LIMIT {int(limit)}"
+    )
+
+
+def _sparql_string(value: str) -> str:
+    return json.dumps(value)
 
 
 def _binding_value(row: dict[str, Any], key: str) -> str:

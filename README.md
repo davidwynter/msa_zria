@@ -10,11 +10,11 @@
 
 We implement Model Synthesis Architecture (MSA) from arxiv paper 2507.12547v1. The code defines `MSA` as a staged reasoning workflow built around three typed steps:
 
-- `parse` into a [ParseTarget](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/data.py:38)
-- `code` into a [CodeTarget](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/data.py:48)
-- `evaluate` into an [EvaluationTarget](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/data.py:60)
+- `parse` into a [ParseTarget](src/msa_zria/data.py)
+- `code` into a [CodeTarget](src/msa_zria/data.py)
+- `evaluate` into an [EvaluationTarget](src/msa_zria/data.py)
 
-That workflow is executed by the [ReasoningPipeline](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/reasoning_pipeline.py:42), which runs:
+That workflow is executed by the [ReasoningPipeline](src/msa_zria/reasoning_pipeline.py), which runs:
 
 1. query parsing
 2. reasoning-program synthesis
@@ -23,17 +23,22 @@ That workflow is executed by the [ReasoningPipeline](/home/david-wynter/yambina_
 
 So in this repository, `MSA` means a multi-stage LLM-assisted reasoning loop with explicit intermediate contracts rather than a single free-form model response.
 
-The code defines `ZRIA` as a separate decision backend layer behind the [BaseZRIAAdapter](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/zria_adapter.py:11) and [BaseZRIABackend](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/zria_backend.py:21) interfaces.
+`ZRIA` is a Zero-Resonance Intelligence Architecture — structured decision backend layer that can resolve a case through rules, a local learned model, a graph-native local learned model, or a remote service, and return a typed EvaluationTarget with fallback tracing. Credit to Richard Aragon for the original architecture this is based on.
 
-`ZRIA` can run through three backend types:
+The code defines `ZRIA` as a separate decision backend layer behind the [BaseZRIAAdapter](src/msa_zria/zria_adapter.py) and [BaseZRIABackend](src/msa_zria/zria_backend.py) interfaces.
+
+`ZRIA` can run through four backend types:
 
 - `rules`: explicit rule matching over query text, parsed state, and KG scope
 - `learned`: a local trained classifier with confidence-based fallback
+- `learned_graph`: a graph-native local trained classifier that combines parsed state with a retrieved WWKG or oxigraph neighborhood
 - `remote`: an external service client with fallback
 
 Each backend returns an `EvaluationTarget`, and the trace model records which backend was configured, which backend actually produced the answer, and whether fallback fired.
 
-So in this repository, `ZRIA` means the structured decision layer that can answer a case directly through rules, a learned local model, or a remote service, independently of the Pyro path.
+`Zria_Graph` is the graph-native learned ZRIA variant implemented by the `learned_graph` backend. In code, it takes the parsed case state plus a retrieved knowledge-graph neighborhood, derives structural graph features from that neighborhood, and predicts the final `EvaluationTarget` through a local classifier with the same fallback tracing model as the other ZRIA backend.
+
+So in this repository, `ZRIA` means the structured decision layer that can answer a case directly through rules, a learned local model, a graph-native learned local model, or a remote service, independently of the Pyro path.
 
 ## What msa_zria Can Solve
 
@@ -399,7 +404,40 @@ Train the learned local ZRIA backend:
 python -m msa_zria.zria train \
   --train examples/zria_examples_train.jsonl \
   --eval examples/zria_examples_eval.jsonl \
+  --backend-type learned \
+  --spectral-k 64 \
+  --dropout 0.2 \
+  --memory-momentum 0.9 \
+  --patience 10 \
   --output outputs/zria_learned
+```
+
+Train the graph-native learned ZRIA backend:
+
+```bash
+python -m msa_zria.zria train \
+  --train examples/zria_examples_train.jsonl \
+  --eval examples/zria_examples_eval.jsonl \
+  --backend-type learned_graph \
+  --spectral-k 16 \
+  --dropout 0.2 \
+  --graph-layers 2 \
+  --harmonic-reg-weight 5e-4 \
+  --pretrain-epochs 10 \
+  --memory-momentum 0.9 \
+  --patience 10 \
+  --output outputs/zria_graph_learned
+```
+
+Warm-start a new learned run from previously persisted ZRIA memory:
+
+```bash
+python -m msa_zria.zria train \
+  --train examples/zria_examples_train.jsonl \
+  --eval examples/zria_examples_eval.jsonl \
+  --backend-type learned \
+  --resume-memory-from outputs/zria_learned \
+  --output outputs/zria_learned_transfer
 ```
 
 Compare the learned backend against the rules backend:
@@ -409,6 +447,23 @@ python -m msa_zria.zria compare \
   --model outputs/zria_learned \
   --rules examples/zria_rules.json \
   --input examples/zria_examples_eval.jsonl
+```
+
+Run a learned-backend tuning sweep across `spectral_k` and `dropout`:
+
+```bash
+python -m msa_zria.zria sweep \
+  --train examples/zria_examples_train.jsonl \
+  --eval examples/zria_examples_eval.jsonl \
+  --backend-type learned \
+  --output-dir outputs/zria_sweeps \
+  --output outputs/zria_sweeps/report.json \
+  --spectral-k 16 \
+  --spectral-k 32 \
+  --spectral-k 64 \
+  --dropout 0.2 \
+  --dropout 0.5 \
+  --patience 10
 ```
 
 Run the integration tests:
@@ -650,7 +705,7 @@ The ingestion script accepts `CustomerSupportCase` JSONL rows. A source case con
 - `code_target`
 - `evaluation_target`
 
-See [customer_support_cases.jsonl](/home/david-wynter/yambina_dev/tools/msa_zria/examples/customer_support_cases.jsonl) for concrete examples.
+See [customer_support_cases.jsonl](examples/customer_support_cases.jsonl) for concrete examples.
 
 ### Evaluation Contract
 
@@ -678,7 +733,7 @@ This gives the project a stable pass/fail contract for offline benchmarks and re
 
 ## Training Entry Point
 
-The training path is implemented in [train.py](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/train.py).
+The training path is implemented in [train.py](src/msa_zria/train.py).
 
 It does the following:
 
@@ -693,11 +748,11 @@ This is the supported path for Gemma 4 12B fine-tuning in this repository.
 
 ## Narrow End-to-End Slice
 
-The minimal end-to-end `msa_zria` flow is implemented in [reasoning_pipeline.py](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/reasoning_pipeline.py):
+The minimal end-to-end `msa_zria` flow is implemented in [reasoning_pipeline.py](src/msa_zria/reasoning_pipeline.py):
 
 1. Parse a query into `ParseTarget`
 2. Generate a `CodeTarget`
-3. Execute the generated program through [pyro_runtime.py](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/pyro_runtime.py)
+3. Execute the generated program through [pyro_runtime.py](src/msa_zria/pyro_runtime.py)
 4. Evaluate the result into `EvaluationTarget`
 
 The Pyro runner expects generated code to define `run_inference()`.
@@ -705,18 +760,19 @@ It validates the generated AST, restricts imports and builtins, executes in a se
 
 ## ZRIA Adapter
 
-The ZRIA integration point is defined in [zria_adapter.py](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/zria_adapter.py):
+The ZRIA integration point is defined in [zria_adapter.py](src/msa_zria/zria_adapter.py):
 
 - `BaseZRIAAdapter`
 - `ConfiguredZRIAAdapter`
 - `RuleBasedZRIAAdapter`
 
-The rules backend is loaded from [zria_rules.json](/home/david-wynter/yambina_dev/tools/msa_zria/examples/zria_rules.json) through [zria_backend.py](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/zria_backend.py). The trainable local backend is implemented in [zria.py](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/zria.py), and a remote client backend also lives in [zria_backend.py](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/zria_backend.py).
+The rules backend is loaded from [zria_rules.json](examples/zria_rules.json) through [zria_backend.py](src/msa_zria/zria_backend.py). The trainable local backend is implemented in [zria.py](src/msa_zria/zria.py), and a remote client backend also lives in [zria_backend.py](src/msa_zria/zria_backend.py).
 
 Supported backend types:
 
 - `rules`
 - `learned`
+- `learned_graph`
 - `remote`
 
 Example learned-backend config:
@@ -725,6 +781,17 @@ Example learned-backend config:
 zria:
   backend: learned
   learned_model_path: outputs/zria_learned
+  confidence_threshold: 0.6
+  fallback_to_rules: true
+```
+
+Example graph-native learned-backend config:
+
+```yaml
+zria:
+  backend: learned_graph
+  learned_graph_model_path: outputs/zria_graph_learned
+  graph_neighborhood_limit: 64
   confidence_threshold: 0.6
   fallback_to_rules: true
 ```
@@ -739,10 +806,31 @@ zria:
 ```
 
 Rules remain the fallback backend for both `learned` and `remote` when the learned model is low-confidence or the remote service is unavailable.
+Rules also remain the fallback backend for `learned_graph` when the graph-native model is low-confidence or neighborhood retrieval fails.
+
+The learned local backend also supports:
+
+- `spectral_k` as the width of a spectral summary over the token-sequence signal
+- `dropout` in the learned classifier head
+- `patience` for validation-based early stopping when an eval set is provided
+- per-label ZRIA memory vectors that are updated after each epoch and stored in the artifact
+- `resume-memory-from` to reuse persisted ZRIA memory during transfer runs
+- `sweep` runs that compare multiple `spectral_k`/`dropout` combinations and report the best configuration
+
+For `learned_graph`, inference uses:
+
+- the parsed state
+- the current KG scope
+- a retrieved WWKG or oxigraph neighborhood limited by `graph_neighborhood_limit`
+- an induced subgraph representation over retrieved nodes, edges, relation ids, spectral positions, and anchor roles
+- a relation-aware R-GCN-style local encoder with parsed-state to graph fusion
+- spectral positional encoding plus harmonic regularization during training
+- optional self-supervised graph pretraining with relation prediction and edge denoising tasks
+- calibrated confidence output and graph explanation edges in the prediction trace
 
 ## Ablation Runner
 
-The ablation harness is implemented in [ablation.py](/home/david-wynter/yambina_dev/tools/msa_zria/src/msa_zria/ablation.py).
+The ablation harness is implemented in [ablation.py](src/msa_zria/ablation.py).
 
 It currently compares:
 
@@ -756,7 +844,7 @@ The runner emits:
 - per-mode accuracy
 - per-mode average score
 
-Sample ablation inputs live in [ablation_cases.jsonl](/home/david-wynter/yambina_dev/tools/msa_zria/examples/ablation_cases.jsonl).
+Sample ablation inputs live in [ablation_cases.jsonl](examples/ablation_cases.jsonl).
 
 The CLI entrypoint reads `ablation.cases_path` and `ablation.output_path` from `ExperimentConfig`:
 
@@ -784,8 +872,8 @@ The LoRA config intentionally does **not** hardcode target modules. Current Gemm
 
 The fine-tuning stage has separate accelerator-aware profiles for both of your planned cards:
 
-- [configs/gemma4_12b_a770.yaml](/home/david-wynter/yambina_dev/tools/msa_zria/configs/gemma4_12b_a770.yaml)
-- [configs/gemma4_12b_v100.yaml](/home/david-wynter/yambina_dev/tools/msa_zria/configs/gemma4_12b_v100.yaml)
+- [configs/gemma4_12b_a770.yaml](configs/gemma4_12b_a770.yaml)
+- [configs/gemma4_12b_v100.yaml](configs/gemma4_12b_v100.yaml)
 
 Practical defaults:
 

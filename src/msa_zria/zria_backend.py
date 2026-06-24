@@ -9,9 +9,11 @@ from urllib import error, request
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from msa_zria.config import KGScope, ZRIAConfig
+from msa_zria.config import KGConfig, KGScope, ZRIAConfig
 from msa_zria.data import EvaluationTarget, ParseTarget
+from msa_zria.kg import retrieve_neighborhood
 from msa_zria.zria import (
+    ZRIAGraphEvidence,
     ZRIALearnedArtifact,
     load_artifact,
     predict_with_model,
@@ -46,6 +48,9 @@ class ZRIAPredictionTrace(BaseModel):
     fallback_reason: str | None = None
     control_event_type: str | None = None
     confidence: float | None = None
+    raw_confidence: float | None = None
+    calibration_temperature: float | None = None
+    graph_explanation: list[ZRIAGraphEvidence] = Field(default_factory=list)
     prediction: EvaluationTarget
 
 
@@ -179,6 +184,10 @@ class LearnedZRIABackend(BaseZRIABackend):
         fallback_backend: BaseZRIABackend | None = None,
     ) -> "LearnedZRIABackend":
         artifact, model = load_artifact(path)
+        if artifact.backend_type != "learned":
+            raise ValueError(
+                f"Expected a learned artifact for LearnedZRIABackend, found '{artifact.backend_type}'."
+            )
         return cls(
             artifact,
             model,
@@ -196,13 +205,19 @@ class LearnedZRIABackend(BaseZRIABackend):
             return self._fallback(query, parsed, kg_scope, "Parsed input was missing for learned ZRIA backend.")
 
         try:
-            predicted, confidence = predict_with_model(
+            prediction_result = predict_with_model(
                 self.artifact,
                 self.model,
                 query,
                 parsed,
                 kg_scope,
+                return_debug=True,
             )
+            if len(prediction_result) == 3:
+                predicted, confidence, debug = prediction_result
+            else:
+                predicted, confidence = prediction_result
+                debug = {}
         except Exception as exc:
             return self._fallback(query, parsed, kg_scope, f"Learned ZRIA backend failed: {exc}")
 
@@ -218,6 +233,8 @@ class LearnedZRIABackend(BaseZRIABackend):
             configured_backend="learned",
             effective_backend="learned",
             confidence=confidence,
+            raw_confidence=debug.get("raw_confidence"),
+            calibration_temperature=debug.get("temperature"),
             prediction=predicted,
         )
 
@@ -247,6 +264,153 @@ class LearnedZRIABackend(BaseZRIABackend):
         return ZRIAPredictionTrace(
             configured_backend="learned",
             effective_backend="learned",
+            fallback_fired=True,
+            fallback_reason=explanation,
+            control_event_type=(
+                "low_confidence_learned_fallback"
+                if "below threshold" in explanation
+                else "learned_backend_failure"
+            ),
+            confidence=confidence,
+            prediction=EvaluationTarget(
+                verdict="insufficient_information",
+                resolved=False,
+                should_escalate=False,
+                explanation=explanation,
+            ),
+        )
+
+
+class LearnedGraphZRIABackend(BaseZRIABackend):
+    def __init__(
+        self,
+        artifact: ZRIALearnedArtifact,
+        model: Any,
+        *,
+        kg_config: KGConfig,
+        neighborhood_limit: int = 64,
+        confidence_threshold: float = 0.6,
+        fallback_backend: BaseZRIABackend | None = None,
+    ) -> None:
+        self.artifact = artifact
+        self.model = model
+        self.kg_config = kg_config
+        self.neighborhood_limit = neighborhood_limit
+        self.confidence_threshold = confidence_threshold
+        self.fallback_backend = fallback_backend
+
+    @classmethod
+    def from_path(
+        cls,
+        path: str | Path,
+        *,
+        kg_config: KGConfig,
+        neighborhood_limit: int = 64,
+        confidence_threshold: float = 0.6,
+        fallback_backend: BaseZRIABackend | None = None,
+    ) -> "LearnedGraphZRIABackend":
+        artifact, model = load_artifact(path)
+        if artifact.backend_type != "learned_graph":
+            raise ValueError(
+                f"Expected a learned_graph artifact for LearnedGraphZRIABackend, found '{artifact.backend_type}'."
+            )
+        return cls(
+            artifact,
+            model,
+            kg_config=kg_config,
+            neighborhood_limit=neighborhood_limit,
+            confidence_threshold=confidence_threshold,
+            fallback_backend=fallback_backend,
+        )
+
+    def predict_with_trace(
+        self,
+        query: str,
+        parsed: ParseTarget | None = None,
+        kg_scope: KGScope | None = None,
+    ) -> ZRIAPredictionTrace:
+        if parsed is None:
+            return self._fallback(query, parsed, kg_scope, "Parsed input was missing for learned graph ZRIA backend.")
+
+        scoped_kg = self.kg_config.model_copy(
+            update={
+                "workspace": kg_scope.workspace if kg_scope and kg_scope.workspace is not None else self.kg_config.workspace,
+                "branch": kg_scope.branch if kg_scope and kg_scope.branch is not None else self.kg_config.branch,
+                "commit": kg_scope.commit if kg_scope and kg_scope.commit is not None else self.kg_config.commit,
+                "as_of": kg_scope.as_of if kg_scope and kg_scope.as_of is not None else self.kg_config.as_of,
+            }
+        )
+        try:
+            neighborhood = retrieve_neighborhood(
+                scoped_kg,
+                query,
+                parsed,
+                limit=self.neighborhood_limit,
+            )
+            prediction_result = predict_with_model(
+                self.artifact,
+                self.model,
+                query,
+                parsed,
+                kg_scope,
+                neighborhood=neighborhood,
+                return_debug=True,
+            )
+            if len(prediction_result) == 3:
+                predicted, confidence, debug = prediction_result
+            else:
+                predicted, confidence = prediction_result
+                debug = {}
+        except Exception as exc:
+            return self._fallback(query, parsed, kg_scope, f"Learned graph ZRIA backend failed: {exc}")
+
+        if confidence < self.confidence_threshold:
+            return self._fallback(
+                query,
+                parsed,
+                kg_scope,
+                (
+                    f"Learned graph ZRIA backend confidence {confidence:.3f} "
+                    f"was below threshold {self.confidence_threshold:.3f}."
+                ),
+                confidence=confidence,
+            )
+        return ZRIAPredictionTrace(
+            configured_backend="learned_graph",
+            effective_backend="learned_graph",
+            confidence=confidence,
+            raw_confidence=debug.get("raw_confidence"),
+            calibration_temperature=debug.get("temperature"),
+            graph_explanation=debug.get("graph_explanation", []),
+            prediction=predicted,
+        )
+
+    def _fallback(
+        self,
+        query: str,
+        parsed: ParseTarget | None,
+        kg_scope: KGScope | None,
+        explanation: str,
+        confidence: float | None = None,
+    ) -> ZRIAPredictionTrace:
+        if self.fallback_backend is not None:
+            fallback_trace = self.fallback_backend.predict_with_trace(query, parsed=parsed, kg_scope=kg_scope)
+            return ZRIAPredictionTrace(
+                configured_backend="learned_graph",
+                effective_backend=fallback_trace.effective_backend,
+                fallback_fired=True,
+                fallback_reason=explanation,
+                control_event_type=(
+                    "low_confidence_learned_fallback"
+                    if "below threshold" in explanation
+                    else "learned_backend_failure"
+                ),
+                confidence=confidence,
+                prediction=fallback_trace.prediction,
+            )
+        return ZRIAPredictionTrace(
+            configured_backend="learned_graph",
+            effective_backend="learned_graph",
             fallback_fired=True,
             fallback_reason=explanation,
             control_event_type=(
@@ -366,12 +530,22 @@ def _rules_fallback(config: ZRIAConfig) -> BaseZRIABackend | None:
     return RuleBasedZRIABackend.from_path(config.rules_path)
 
 
-def load_zria_backend(config: ZRIAConfig) -> BaseZRIABackend:
+def load_zria_backend(config: ZRIAConfig, kg_config: KGConfig | None = None) -> BaseZRIABackend:
     if config.backend == "rules":
         return RuleBasedZRIABackend.from_path(config.rules_path)
     if config.backend == "learned":
         return LearnedZRIABackend.from_path(
             config.learned_model_path,
+            confidence_threshold=config.confidence_threshold,
+            fallback_backend=_rules_fallback(config),
+        )
+    if config.backend == "learned_graph":
+        if kg_config is None:
+            raise ValueError("kg_config is required when zria.backend='learned_graph'.")
+        return LearnedGraphZRIABackend.from_path(
+            config.learned_graph_model_path,
+            kg_config=kg_config,
+            neighborhood_limit=config.graph_neighborhood_limit,
             confidence_threshold=config.confidence_threshold,
             fallback_backend=_rules_fallback(config),
         )
