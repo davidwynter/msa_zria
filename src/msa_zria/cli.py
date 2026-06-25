@@ -15,6 +15,7 @@ from msa_zria.runtime import (
     build_runtime_dependencies,
     infer,
 )
+from msa_zria.synthetic import write_synthetic_records
 from msa_zria.thinking import ingest_thinking_cases
 
 
@@ -75,6 +76,24 @@ def build_parser() -> argparse.ArgumentParser:
     thinking_ingest_parser.add_argument("--kg-as-of", help="Optional KG as-of override.")
     thinking_ingest_parser.set_defaults(handler=_run_thinking_ingest)
 
+    synthetic_parser = subparsers.add_parser(
+        "synthetic-ingest",
+        help="Build SCP-style synthetic training records for the clara_experiment branch.",
+    )
+    synthetic_parser.add_argument("--input", required=True, help="Path to source support or thinking cases JSONL.")
+    synthetic_parser.add_argument("--output", required=True, help="Path to synthetic DatasetRecord JSONL.")
+    synthetic_parser.add_argument("--case-type", required=True, choices=["support", "thinking"])
+    synthetic_parser.add_argument(
+        "--input-mode",
+        action="append",
+        choices=["triples", "text", "hybrid"],
+        dest="input_modes",
+        help="One or more input modes to emit. Defaults to hybrid.",
+    )
+    synthetic_parser.add_argument("--skip-paraphrase", action="store_true", help="Disable paraphrase records.")
+    synthetic_parser.add_argument("--skip-qa", action="store_true", help="Disable salient QA records.")
+    synthetic_parser.set_defaults(handler=_run_synthetic_ingest)
+
     return parser
 
 
@@ -108,6 +127,20 @@ def _run_thinking_ingest(args: argparse.Namespace, runtime: RuntimeDependencies 
         args.output,
         input_modes=args.input_modes,
         kg_scope=_kg_scope_from_args(args),
+    )
+    print(json.dumps({"output": args.output, "records_written": count}, ensure_ascii=True, sort_keys=True))
+    return 0
+
+
+def _run_synthetic_ingest(args: argparse.Namespace, runtime: RuntimeDependencies | None = None) -> int:
+    del runtime
+    count = write_synthetic_records(
+        args.input,
+        args.output,
+        case_type=args.case_type,
+        input_modes=args.input_modes,
+        include_paraphrase=not args.skip_paraphrase,
+        include_qa=not args.skip_qa,
     )
     print(json.dumps({"output": args.output, "records_written": count}, ensure_ascii=True, sort_keys=True))
     return 0

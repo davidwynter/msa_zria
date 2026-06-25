@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 from msa_zria.audit import AuditRecorder
-from msa_zria.config import KGConfig, KGScope, ZRIAConfig, load_experiment_config
+from msa_zria.config import EvidenceRetrievalConfig, KGConfig, KGScope, ZRIAConfig, load_experiment_config
 from msa_zria.data import CodeTarget, EvaluationTarget, ParseTarget
+from msa_zria.evidence import EvidenceRetriever, KGEvidenceRetriever, render_evidence_context
 from msa_zria.kg import kg_context_metadata
 from msa_zria.pyro_runtime import execute_pyro_program
 from msa_zria.zria_adapter import BaseZRIAAdapter, ConfiguredZRIAAdapter
@@ -60,13 +61,19 @@ class RuntimeDependencies:
     thinking: ModuleBundle | None
     zria_adapter: BaseZRIAAdapter
     audit_recorder: AuditRecorder | None
+    evidence_retriever: EvidenceRetriever | None
 
 
 def row_metadata(scope: KGScope | KGConfig | None) -> dict[str, str]:
     return kg_context_metadata(scope)
 
 
-def _call_module(module: Any, kg_scope: KGScope | None, **kwargs: Any) -> Any:
+def _call_module(
+    module: Any,
+    kg_scope: KGScope | None,
+    evidence_context: str | None = None,
+    **kwargs: Any,
+) -> Any:
     if module is None:
         raise InferenceModuleNotConfiguredError("Inference module is not configured.")
     try:
@@ -75,6 +82,8 @@ def _call_module(module: Any, kg_scope: KGScope | None, **kwargs: Any) -> Any:
         signature = None
     if signature and "kg_context" in signature.parameters and kg_scope is not None:
         kwargs["kg_context"] = kg_scope.model_dump(exclude_none=True)
+    if signature and "evidence_context" in signature.parameters and evidence_context is not None:
+        kwargs["evidence_context"] = evidence_context
     try:
         return module(**kwargs)
     except Exception as exc:
@@ -108,6 +117,14 @@ def _default_audit_recorder() -> AuditRecorder | None:
         experiment_config = load_experiment_config(config_path)
         return AuditRecorder.from_experiment(experiment_config)
     return None
+
+
+def _default_evidence_retriever() -> EvidenceRetriever | None:
+    config_path = os.getenv("MSA_ZRIA_CONFIG")
+    if not config_path or not Path(config_path).exists():
+        return None
+    experiment_config = load_experiment_config(config_path)
+    return _build_evidence_retriever(experiment_config.kg, experiment_config.evidence_retrieval)
 
 
 def _bundle_from_lm_path(lm_path: str | None) -> ModuleBundle:
@@ -166,6 +183,7 @@ def build_runtime_dependencies(
     thinking_eval_module: Any | None = None,
     zria_adapter: BaseZRIAAdapter | None = None,
     audit_recorder: AuditRecorder | None = None,
+    evidence_retriever: EvidenceRetriever | None = None,
 ) -> RuntimeDependencies:
     non_thinking = ModuleBundle(parse=parse_module, code=code_module, evaluate=eval_module).merge_missing(
         _default_module_bundle("non_thinking")
@@ -185,6 +203,7 @@ def build_runtime_dependencies(
         thinking=thinking,
         zria_adapter=zria_adapter or _default_zria_adapter(),
         audit_recorder=audit_recorder if audit_recorder is not None else _default_audit_recorder(),
+        evidence_retriever=evidence_retriever if evidence_retriever is not None else _default_evidence_retriever(),
     )
 
 
@@ -221,7 +240,11 @@ def parse_query(
     reasoning_branch: ReasoningBranch = "non_thinking",
 ) -> ParseTarget:
     bundle = resolve_module_bundle(runtime, reasoning_branch)
-    payload = _extract_payload(_call_module(bundle.parse, kg_scope, text=text), "parsed_result")
+    evidence_context = _retrieve_evidence_context(runtime, text, None, kg_scope)
+    payload = _extract_payload(
+        _call_module(bundle.parse, kg_scope, evidence_context=evidence_context, text=text),
+        "parsed_result",
+    )
     return ParseTarget.model_validate(payload)
 
 
@@ -233,7 +256,14 @@ def synthesize_code(
     reasoning_branch: ReasoningBranch = "non_thinking",
 ) -> CodeTarget:
     bundle = resolve_module_bundle(runtime, reasoning_branch)
-    return _coerce_code_target(_call_module(bundle.code, kg_scope, parsed=parsed))
+    query_text = _render_query_from_parsed(parsed)
+    evidence_context = _retrieve_evidence_context(
+        runtime,
+        query_text,
+        ParseTarget.model_validate(parsed),
+        kg_scope,
+    )
+    return _coerce_code_target(_call_module(bundle.code, kg_scope, evidence_context=evidence_context, parsed=parsed))
 
 
 def evaluate_answer(
@@ -247,7 +277,11 @@ def evaluate_answer(
     if isinstance(answer, EvaluationTarget):
         return answer
     bundle = resolve_module_bundle(runtime, reasoning_branch)
-    payload = _extract_payload(_call_module(bundle.evaluate, kg_scope, query=query, answer=answer), "evaluation")
+    evidence_context = _retrieve_evidence_context(runtime, query, None, kg_scope)
+    payload = _extract_payload(
+        _call_module(bundle.evaluate, kg_scope, evidence_context=evidence_context, query=query, answer=answer),
+        "evaluation",
+    )
     return EvaluationTarget.model_validate(payload)
 
 
@@ -413,3 +447,38 @@ def _record_zria_fallback(
         details=details,
         kg_scope=kg_scope,
     )
+
+
+def _build_evidence_retriever(
+    kg_config: KGConfig,
+    evidence_config: EvidenceRetrievalConfig,
+) -> EvidenceRetriever | None:
+    if not evidence_config.enabled:
+        return None
+    return KGEvidenceRetriever(
+        kg_config,
+        top_k=evidence_config.top_k,
+        candidate_limit=evidence_config.candidate_limit,
+        min_score=evidence_config.min_score,
+    )
+
+
+def _render_query_from_parsed(parsed: dict[str, Any]) -> str:
+    parts = [str(parsed.get("device", "")), str(parsed.get("issue", ""))]
+    if parsed.get("cause"):
+        parts.append(str(parsed["cause"]))
+    if parsed.get("severity"):
+        parts.append(str(parsed["severity"]))
+    return " ".join(part for part in parts if part)
+
+
+def _retrieve_evidence_context(
+    runtime: RuntimeDependencies,
+    query: str,
+    parsed: ParseTarget | None,
+    kg_scope: KGScope | None,
+) -> str | None:
+    if runtime.evidence_retriever is None:
+        return None
+    snippets = runtime.evidence_retriever.retrieve(query, parsed=parsed, kg_scope=kg_scope)
+    return render_evidence_context(snippets)

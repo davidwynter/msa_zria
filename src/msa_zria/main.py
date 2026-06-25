@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from msa_zria.audit import AuditRecorder
 from msa_zria.config import KGConfig, KGScope
 from msa_zria.data import EvaluationCase, EvaluationResult, evaluate_case
+from msa_zria.evidence import EvidenceRetriever
 from msa_zria.kg import load_triples
 from msa_zria.runtime import (
     BranchConfigurationError,
@@ -118,6 +119,7 @@ def create_app(
     thinking_eval_module: Any | None = None,
     zria_adapter: BaseZRIAAdapter | None = None,
     audit_recorder: AuditRecorder | None = None,
+    evidence_retriever: EvidenceRetriever | None = None,
     initialize_ray: bool = True,
 ) -> FastAPI:
     if initialize_ray:
@@ -138,6 +140,7 @@ def create_app(
         thinking_eval_module=thinking_eval_module,
         zria_adapter=zria_adapter,
         audit_recorder=audit_recorder,
+        evidence_retriever=evidence_retriever,
     )
     app = FastAPI(title="MSA Reasoning Service")
 

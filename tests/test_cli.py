@@ -161,6 +161,28 @@ class CLITest(unittest.TestCase):
             self.assertEqual(payload["records_written"], 3)
             self.assertTrue(output_path.exists())
 
+    def test_synthetic_ingest_builds_clara_style_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "synthetic_records.jsonl"
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "synthetic-ingest",
+                        "--input",
+                        str(Path(__file__).resolve().parents[1] / "examples" / "thinking_cases_eval.jsonl"),
+                        "--output",
+                        str(output_path),
+                        "--case-type",
+                        "thinking",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["records_written"], 6)
+            self.assertTrue(output_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

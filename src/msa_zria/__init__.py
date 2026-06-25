@@ -8,7 +8,14 @@ from msa_zria.audit import (
     sha256_text,
     stable_dataset_version,
 )
-from msa_zria.config import ExperimentConfig, KGConfig, KGScope, ZRIAConfig, load_experiment_config
+from msa_zria.config import (
+    EvidenceRetrievalConfig,
+    ExperimentConfig,
+    KGConfig,
+    KGScope,
+    ZRIAConfig,
+    load_experiment_config,
+)
 from msa_zria.data import (
     CodeTarget,
     DatasetRecord,
@@ -36,6 +43,7 @@ from msa_zria.ingest import (
     ingest_customer_support_cases,
     load_customer_support_cases,
 )
+from msa_zria.evidence import EvidenceRetriever, EvidenceSnippet, KGEvidenceRetriever, render_evidence_context
 from msa_zria.kg import kg_context_metadata, load_triples, retrieve_neighborhood
 from msa_zria.pyro_runtime import PyroExecutionResult, execute_pyro_program
 from msa_zria.reasoning_pipeline import PipelineResult, ReasoningPipeline
@@ -45,6 +53,7 @@ from msa_zria.runtime import (
     build_runtime_dependencies,
     infer,
 )
+from msa_zria.synthetic import build_synthetic_records, write_synthetic_records
 from msa_zria.validate_contracts import ContractValidationDetail, ContractValidationReport, ContractValidationSummary, validate_contracts
 from msa_zria.zria import (
     ZRIAComparisonDetail,
@@ -104,6 +113,9 @@ __all__ = [
     "ContractValidationSummary",
     "CustomerSupportCase",
     "DatasetRecord",
+    "EvidenceRetriever",
+    "EvidenceRetrievalConfig",
+    "EvidenceSnippet",
     "ExperimentConfig",
     "EvaluationCase",
     "EvaluationResult",
@@ -111,6 +123,7 @@ __all__ = [
     "HeuristicZRIAAdapter",
     "KGConfig",
     "KGScope",
+    "KGEvidenceRetriever",
     "LearnedGraphZRIABackend",
     "LearnedZRIABackend",
     "RuleBasedZRIABackend",
@@ -142,6 +155,7 @@ __all__ = [
     "execute_pyro_program",
     "available_reasoning_branches",
     "build_runtime_dependencies",
+    "build_synthetic_records",
     "ingest_customer_support_cases",
     "kg_context_metadata",
     "load_ablation_cases",
@@ -152,6 +166,7 @@ __all__ = [
     "load_zria_examples",
     "load_zria_backend",
     "retrieve_neighborhood",
+    "render_evidence_context",
     "run_ablation",
     "infer",
     "run_sweep",
@@ -164,6 +179,7 @@ __all__ = [
     "train_graph_model",
     "train_from_config",
     "validate_contracts",
+    "write_synthetic_records",
     "write_ablation_report",
     "write_jsonl_records",
     "ZRIABundle",

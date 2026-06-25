@@ -265,6 +265,14 @@ def execute_pyro_program(
         }
     )
     command = [sys.executable, "-m", "msa_zria.pyro_runtime", "--worker-output", output_path]
+    worker_env = dict(os.environ)
+    package_root = str(Path(__file__).resolve().parents[1])
+    existing_pythonpath = worker_env.get("PYTHONPATH")
+    worker_env["PYTHONPATH"] = (
+        package_root
+        if not existing_pythonpath
+        else f"{package_root}{os.pathsep}{existing_pythonpath}"
+    )
     try:
         completed = subprocess.run(
             command,
@@ -272,7 +280,7 @@ def execute_pyro_program(
             text=True,
             capture_output=True,
             timeout=timeout_seconds + 1.0,
-            env=dict(os.environ),
+            env=worker_env,
             check=False,
         )
     except subprocess.TimeoutExpired:

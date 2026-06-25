@@ -27,9 +27,10 @@ class ThinkingDSPyModuleContractTest(unittest.TestCase):
             ]
         )
         module = ThinkingParseModule(llm)
-        result = module("Router123 is overheating")
+        result = module("Router123 is overheating", evidence_context="Retrieved evidence:\n1. Router123 requires escalation.")
         self.assertEqual(result["parsed_result"]["task"], "parse")
         self.assertIn("specialist thinking branch", llm.prompts[0].lower())
+        self.assertIn("retrieved evidence", llm.prompts[0].lower())
 
     def test_code_module_validates_json_contract(self) -> None:
         module = ThinkingCodeGenModule(

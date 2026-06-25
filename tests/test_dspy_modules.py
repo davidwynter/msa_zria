@@ -10,8 +10,10 @@ from msa_zria.dspy_modules import CodeGenModule, EvalModule, ParseModule
 class _FakeLLM:
     def __init__(self, responses: list[str]) -> None:
         self.responses = list(responses)
+        self.prompts: list[str] = []
 
     def __call__(self, prompt: str) -> str:
+        self.prompts.append(prompt)
         if not self.responses:
             raise AssertionError("No more fake responses were configured.")
         return self.responses.pop(0)
@@ -19,16 +21,18 @@ class _FakeLLM:
 
 class DSPyModuleContractTest(unittest.TestCase):
     def test_parse_module_validates_json_contract(self) -> None:
-        module = ParseModule(
-            _FakeLLM(
-                [
-                    '{"task":"parse","device":"Router123","issue":"Overheating","cause":null,"severity":"high"}'
-                ]
-            )
+        llm = _FakeLLM(
+            [
+                '{"task":"parse","device":"Router123","issue":"Overheating","cause":null,"severity":"high"}'
+            ]
         )
-        result = module("Router123 is overheating")
+        module = ParseModule(
+            llm
+        )
+        result = module("Router123 is overheating", evidence_context="Retrieved evidence:\n1. Router123 has overheating incidents.")
         self.assertEqual(result["parsed_result"]["task"], "parse")
         self.assertEqual(result["parsed_result"]["device"], "Router123")
+        self.assertIn("Retrieved evidence", llm.prompts[0])
 
     def test_code_module_validates_json_contract(self) -> None:
         module = CodeGenModule(

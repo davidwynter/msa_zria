@@ -108,6 +108,15 @@ class ZRIAConfig(BaseModel):
     fallback_to_rules: bool = True
 
 
+class EvidenceRetrievalConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    top_k: int = 5
+    candidate_limit: int = 32
+    min_score: float = 0.5
+
+
 class AuditConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -179,6 +188,7 @@ class ExperimentConfig(BaseModel):
     seed: int = 42
     kg: KGConfig = Field(default_factory=KGConfig)
     zria: ZRIAConfig = Field(default_factory=ZRIAConfig)
+    evidence_retrieval: EvidenceRetrievalConfig = Field(default_factory=EvidenceRetrievalConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     model: ModelConfig = Field(default_factory=ModelConfig)
