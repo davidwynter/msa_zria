@@ -1,5 +1,11 @@
 # msa_zria
 
+## Status
+
+`Status: MVP / Pre-Production`
+
+`msa_zria` has a working end-to-end pipeline for typed dataset ingestion, Gemma fine-tuning, ZRIA backend training, controlled Pyro execution, audit logging, and validation tooling. It should be treated as a buildable and testable system for pilots and internal evaluation, not yet as a finished production platform.
+
 `msa_zria` combines:
 
 - MSA-style LLM parsing and model synthesis
@@ -121,6 +127,19 @@ Why `msa_zria` fits:
 
 - policy reasoning is structured
 - the output should be inspectable and defensible
+
+## Readiness Criteria
+
+This repository uses the following readiness labels:
+
+- `POC`: the core idea is demonstrated, but one or more of the major paths are still stubbed, heuristic, or not yet wired into a repeatable end-to-end flow.
+- `MVP`: the main `parse -> code -> evaluate` and `ZRIA` paths run end to end with real configs, typed datasets, trainable backends, controlled execution, and test coverage, but production rollout still depends on domain validation and operational hardening.
+- `Production`: the chosen backend path is validated on real domain data, audit and lineage are complete, backend comparisons and acceptance reports are in place, deployment configs are stable, and the system is ready to be promoted under normal operational controls.
+
+In repo terms, the transition is conditioned by artifacts like:
+
+- `POC -> MVP`: runnable training entrypoints, canonical JSONL dataset contracts, trainable `learned` or `learned_graph` backends, controlled Pyro execution, and passing integration tests.
+- `MVP -> Production`: validated production configs, audit lineage records, contract-validation reports, ablation and backend-comparison reports, live KG checks where applicable, and promotion evidence for the branch or workspace being deployed.
 
 ## From Data to Production
 
@@ -540,7 +559,8 @@ seed: 42
 model:
   base_model_id: google/gemma-4-12B
   processor_id: google/gemma-4-12B-it
-  load_in_4bit: true
+  quantization_bits: 4
+  quantization_backend: bitsandbytes
 training:
   output_dir: outputs/gemma4_12b
   learning_rate: 2.0e-4
@@ -562,6 +582,8 @@ The config also includes:
 - `zria.rules_path`
 - `zria.learned_model_path`
 - `zria.confidence_threshold`
+
+For quantization, use `quantization_bits: 4` with `quantization_backend: bitsandbytes` for the current QLoRA path, or `quantization_bits: 5` / `6` with `quantization_backend: hqq` when the HQQ extra is installed.
 - `zria.remote_url`
 - `zria.fallback_to_rules`
 - `audit.enabled`
@@ -603,6 +625,8 @@ kg:
   graph_path: data/domain_graph.nq
   graph_format: nquads
 ```
+
+With `backend: oxigraph`, do not set WWKG-only scope fields such as `workspace`, `branch`, `commit`, `as_of`, or WWKG SPARQL fields. Those are validated only for `backend: wwkg`.
 
 ## Audit and Lineage
 
@@ -904,7 +928,7 @@ The model-loading path does the following:
 
 - selects the accelerator explicitly: `cuda`, `xpu`, or `auto`
 - uses `bfloat16` on newer CUDA GPUs when available, `float16` on V100 and Intel Arc
-- configures BitsAndBytes 4-bit NF4 quantization
+- configures 4-bit BitsAndBytes NF4 quantization or 5/6-bit HQQ quantization
 - loads `AutoModelForMultimodalLM`
 - loads the Gemma 4 instruction processor
 - optionally calls `prepare_model_for_kbit_training`

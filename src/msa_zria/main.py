@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -49,7 +49,8 @@ class FineTuneConfig(BaseModel):
     dataset_path: str
     output_dir: str
     accelerator: str = "auto"
-    load_in_4bit: bool = True
+    quantization_bits: Literal[4, 5, 6] | None = 4
+    quantization_backend: Literal["auto", "bitsandbytes", "hqq"] = "auto"
     epochs: int = 3
     lora_r: int = 16
     learning_rate: float = 2e-4

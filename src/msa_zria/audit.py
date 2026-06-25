@@ -148,12 +148,7 @@ class AuditRecorder:
     def from_experiment(cls, config: ExperimentConfig) -> "AuditRecorder | None":
         if not config.audit.enabled:
             return None
-        default_scope = KGScope(
-            workspace=config.kg.workspace,
-            branch=config.kg.branch,
-            commit=config.kg.commit,
-            as_of=config.kg.as_of,
-        )
+        default_scope = config.kg.effective_scope()
         return cls(config.audit, default_scope=default_scope)
 
     @classmethod

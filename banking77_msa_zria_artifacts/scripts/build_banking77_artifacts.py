@@ -14,8 +14,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 SYSTEM = "You are a customer support reasoning assistant. Use the provided facts and return only valid JSON that matches the requested schema."
-WORKSPACE = "urn:wwkg:workspace:banking77"
-BRANCH = "banking77-benchmark"
 
 SMOKE_CASES = [
     ("cash_withdrawal", "The ATM took my card and cash did not come out. What should I do?", "debit_card", "cash withdrawal failed", "atm retained card", "high"),
@@ -100,7 +98,6 @@ def build_case(case_id: str, text: str, intent: str, split: str, explicit: Optio
         "candidate_answer": candidate_answer,
         "triples": triples,
         "context": [f"BANKING77 intent: {intent}", f"Expected benchmark decision: {evaluation['verdict']}"],
-        "kg_scope": {"workspace": WORKSPACE, "branch": BRANCH},
         "parse_target": parsed,
         "code_target": code,
         "evaluation_target": evaluation,
@@ -127,13 +124,19 @@ def dataset_records(cases: List[Dict[str,Any]]) -> List[Dict[str,Any]]:
     rows=[]
     for c in cases:
         for task, target_key in [("parse","parse_target"),("code","code_target"),("evaluate","evaluation_target")]:
+            metadata = {**c.get("metadata",{}), "case_id": c["case_id"], "task": task, "input_mode":"hybrid"}
+            kg_scope = c.get("kg_scope") or {}
+            if kg_scope.get("workspace"):
+                metadata["kg_workspace"] = kg_scope["workspace"]
+            if kg_scope.get("branch"):
+                metadata["kg_branch"] = kg_scope["branch"]
             rows.append({
                 "example_id": f"{c['case_id']}-{task}-hybrid",
                 "task": task,
                 "input_mode": "hybrid",
                 "messages": record_messages(c, task),
                 "target": c[target_key],
-                "metadata": {**c.get("metadata",{}), "case_id": c["case_id"], "task": task, "input_mode":"hybrid", "kg_workspace": c["kg_scope"]["workspace"], "kg_branch": c["kg_scope"]["branch"]},
+                "metadata": metadata,
             })
     return rows
 
@@ -141,20 +144,28 @@ def dataset_records(cases: List[Dict[str,Any]]) -> List[Dict[str,Any]]:
 def zria_examples(cases: List[Dict[str,Any]], prefix: str) -> List[Dict[str,Any]]:
     out=[]
     for i,c in enumerate(cases,1):
-        out.append({
+        row = {
             "example_id": f"zria-{prefix}-{i:05d}",
             "query": c["customer_message"],
             "parsed": c["parse_target"],
-            "kg_scope": c["kg_scope"],
             "neighborhood": c["triples"],
             "target": c["evaluation_target"],
             "metadata": {"case_id": c["case_id"], "intent": c["metadata"]["intent"], "source_dataset":"BANKING77"},
-        })
+        }
+        if c.get("kg_scope"):
+            row["kg_scope"] = c["kg_scope"]
+        out.append(row)
     return out
 
 
 def ablation_cases(cases: List[Dict[str,Any]]) -> List[Dict[str,Any]]:
-    return [{"case_id":c["case_id"],"query":c["customer_message"],"kg_scope":c["kg_scope"],"expected":c["evaluation_target"]} for c in cases]
+    rows = []
+    for c in cases:
+        row = {"case_id":c["case_id"],"query":c["customer_message"],"expected":c["evaluation_target"]}
+        if c.get("kg_scope"):
+            row["kg_scope"] = c["kg_scope"]
+        rows.append(row)
+    return rows
 
 
 def write_jsonl(path: Path, rows: Iterable[Dict[str,Any]]) -> int:

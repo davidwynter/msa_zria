@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 from peft import LoraConfig, prepare_model_for_kbit_training
-from transformers import AutoModelForMultimodalLM, AutoProcessor, BitsAndBytesConfig
+from transformers import AutoModelForMultimodalLM, AutoProcessor, BitsAndBytesConfig, HqqConfig
 from trl import SFTConfig
 
 from msa_zria.config import ModelConfig, TrainingConfig
@@ -64,21 +64,46 @@ def preferred_optimizer(accelerator: str) -> str:
 def build_quantization_config(
     model_config: ModelConfig,
     accelerator: str = "auto",
-) -> BitsAndBytesConfig | None:
-    if not model_config.load_in_4bit:
+) -> BitsAndBytesConfig | HqqConfig | None:
+    if model_config.quantization_bits is None:
         return None
 
     resolved = detect_accelerator(accelerator)
-    if resolved not in {"cuda", "xpu"}:
-        raise RuntimeError("4-bit quantization is only enabled for CUDA or XPU accelerators.")
+    bits = model_config.quantization_bits
+    backend = model_config.quantization_backend
+    if backend == "auto":
+        backend = "bitsandbytes" if bits == 4 else "hqq"
 
-    dtype = preferred_torch_dtype(resolved)
-    return BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_use_double_quant=model_config.use_double_quant,
-        bnb_4bit_quant_type=model_config.quant_type,
-        bnb_4bit_compute_dtype=dtype,
-        bnb_4bit_quant_storage=dtype,
+    if backend == "bitsandbytes":
+        if bits != 4:
+            raise RuntimeError(
+                f"BitsAndBytes quantization only supports the current 4-bit path in msa_zria; received {bits}-bit."
+            )
+        if resolved not in {"cuda", "xpu"}:
+            raise RuntimeError("4-bit BitsAndBytes quantization is only enabled for CUDA or XPU accelerators.")
+
+        dtype = preferred_torch_dtype(resolved)
+        return BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=model_config.use_double_quant,
+            bnb_4bit_quant_type=model_config.quant_type,
+            bnb_4bit_compute_dtype=dtype,
+            bnb_4bit_quant_storage=dtype,
+        )
+
+    if backend == "hqq":
+        try:
+            return HqqConfig(
+                nbits=bits,
+                skip_modules=["lm_head"],
+            )
+        except ImportError as exc:
+            raise RuntimeError(
+                f"{bits}-bit quantization requires the optional HQQ backend to be installed."
+            ) from exc
+
+    raise ValueError(
+        f"Unsupported quantization backend '{model_config.quantization_backend}'."
     )
 
 

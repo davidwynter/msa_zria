@@ -279,12 +279,7 @@ def main() -> None:
         cases,
         pipeline,
         ConfiguredZRIAAdapter.from_config(config.zria, config.kg),
-        kg_scope=KGScope(
-            workspace=config.kg.workspace,
-            branch=config.kg.branch,
-            commit=config.kg.commit,
-            as_of=config.kg.as_of,
-        ),
+        kg_scope=config.kg.effective_scope(),
     )
     write_ablation_report(report, config.ablation.output_path)
     audit_recorder = AuditRecorder.from_experiment(config)
@@ -302,12 +297,7 @@ def main() -> None:
                 for summary in report.summaries
             },
             artifact_path=config.ablation.output_path,
-            kg_scope=KGScope(
-                workspace=config.kg.workspace,
-                branch=config.kg.branch,
-                commit=config.kg.commit,
-                as_of=config.kg.as_of,
-            ),
+            kg_scope=config.kg.effective_scope(),
         )
     print(f"Wrote ablation report to {config.ablation.output_path}")
 

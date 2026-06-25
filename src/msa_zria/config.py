@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class KGScope(BaseModel):
@@ -43,6 +43,35 @@ class KGConfig(KGScope):
     retry_backoff_seconds: float = 0.25
     user_agent: str = "msa-zria/0.1.0"
 
+    @model_validator(mode="after")
+    def validate_backend_specific_fields(self) -> "KGConfig":
+        if self.backend == "oxigraph":
+            unsupported = [
+                field_name
+                for field_name in ("workspace", "branch", "commit", "as_of", "graph_iri", "sparql_query")
+                if getattr(self, field_name) is not None
+            ]
+            if unsupported:
+                fields = ", ".join(unsupported)
+                raise ValueError(
+                    f"kg.backend='oxigraph' does not support WWKG scope or SPARQL fields: {fields}."
+                )
+        if self.backend == "wwkg" and self.graph_path is not None:
+            raise ValueError("kg.backend='wwkg' does not use kg.graph_path; configure a WWKG endpoint instead.")
+        return self
+
+    def effective_scope(self) -> KGScope | None:
+        if self.backend != "wwkg":
+            return None
+        if not any((self.workspace, self.branch, self.commit, self.as_of)):
+            return None
+        return KGScope(
+            workspace=self.workspace,
+            branch=self.branch,
+            commit=self.commit,
+            as_of=self.as_of,
+        )
+
     def resolved_sparql_query(self) -> str:
         if self.sparql_query:
             return self.sparql_query
@@ -55,7 +84,7 @@ class KGConfig(KGScope):
         return "SELECT ?subject ?predicate ?object WHERE { ?subject ?predicate ?object }"
 
     def to_metadata(self) -> dict[str, str]:
-        metadata = super().to_metadata()
+        metadata = self.effective_scope().to_metadata() if self.effective_scope() is not None else {}
         metadata["kg_backend"] = self.backend
         if self.graph_iri:
             metadata["kg_graph_iri"] = self.graph_iri
@@ -94,7 +123,8 @@ class ModelConfig(BaseModel):
 
     base_model_id: str = "google/gemma-4-12B"
     processor_id: str = "google/gemma-4-12B-it"
-    load_in_4bit: bool = True
+    quantization_bits: Literal[4, 5, 6] | None = 4
+    quantization_backend: Literal["auto", "bitsandbytes", "hqq"] = "auto"
     use_double_quant: bool = True
     quant_type: str = "nf4"
     prepare_for_kbit_training: bool = True

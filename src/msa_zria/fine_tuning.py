@@ -24,7 +24,8 @@ def train_lora(config, checkpoint_dir=None):
     model_config = ModelConfig(
         base_model_id=config["model_name"],
         processor_id=config["processor_name"],
-        load_in_4bit=config["load_in_4bit"],
+        quantization_bits=config["quantization_bits"],
+        quantization_backend=config["quantization_backend"],
     )
     model, processor = load_model_and_processor(model_config, accelerator=accelerator)
     tokenizer = processor.tokenizer
@@ -76,7 +77,8 @@ def fine_tune(cfg: FineTuneConfig):
         'model_name': 'google/gemma-4-12B',
         'processor_name': 'google/gemma-4-12B-it',
         'accelerator': cfg.accelerator,
-        'load_in_4bit': cfg.load_in_4bit,
+        'quantization_bits': cfg.quantization_bits,
+        'quantization_backend': cfg.quantization_backend,
         'gradient_checkpointing': cfg.gradient_checkpointing,
         'dataset_path': cfg.dataset_path,
         'output_dir': cfg.output_dir,
