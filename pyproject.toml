@@ -22,6 +22,9 @@ dependencies = [
   "trl>=0.25.0",
 ]
 
+[project.scripts]
+msa-zria = "msa_zria.cli:main"
+
 [project.optional-dependencies]
 api = [
   "dspy>=2.6.0",

@@ -325,6 +325,45 @@ Operationally, there are two common patterns:
 
 The second pattern is often the best fit when the final answer is mainly a graph-backed business decision.
 
+### Runtime Reasoning Branches
+
+The runtime now separates backend `mode` from reasoning `branch`.
+
+- `mode` still chooses `pyro`, `zria`, or `hybrid`
+- `reasoning_branch` chooses which Gemma path supplies parse/code/evaluate behavior
+
+Recommended naming:
+
+- `non_thinking`: the current narrow production path
+- `thinking`: the specialist reasoning path trained on deeper verified traces
+
+This keeps the external contract stable while letting the caller choose how much reasoning depth is worth paying for on a request.
+
+The specialist path is not just another checkpoint name. It should be trained from specialist source cases such as:
+
+- focused domain rules
+- verified claims and evidence snippets
+- exemplar reasoning traces
+- verification checks that define what a defensible answer must preserve
+
+The repository supports that with:
+
+- source specialist cases: `examples/thinking_cases_train.jsonl`
+- specialist ingest: `msa-zria thinking-ingest`
+- specialist training config: `configs/gemma4_12b_thinking.yaml`
+- specialist runtime model path: `LM_PATH_THINKING`
+
+Example:
+
+```bash
+LM_PATH_NON_THINKING=outputs/gemma4_12b \
+LM_PATH_THINKING=outputs/gemma4_12b_thinking \
+msa-zria infer \
+  --query "The monitor failed after the box was opened." \
+  --mode pyro \
+  --reasoning-branch thinking
+```
+
 ## 11. Validate Before Promotion
 
 Before a model is production-ready, run three separate checks.

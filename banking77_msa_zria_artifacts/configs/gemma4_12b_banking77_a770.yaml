@@ -1,0 +1,38 @@
+experiment_name: msa-zria-gemma4-12b-banking77-a770
+seed: 42
+model:
+  base_model_id: google/gemma-4-12B
+  processor_id: google/gemma-4-12B-it
+  load_in_4bit: true
+training:
+  output_dir: outputs/gemma4_12b_banking77_a770
+  learning_rate: 2.0e-4
+  num_train_epochs: 3
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 16
+  accelerator: xpu
+  dtype: float16
+kg:
+  backend: oxigraph
+  graph_path: data/banking77_graph.nq
+  graph_format: nquads
+  workspace: urn:wwkg:workspace:banking77
+  branch: banking77-benchmark
+zria:
+  backend: learned_graph
+  rules_path: examples/banking77_zria_rules.json
+  learned_graph_model_path: outputs/zria_graph_banking77
+  graph_neighborhood_limit: 64
+  confidence_threshold: 0.6
+  fallback_to_rules: true
+audit:
+  enabled: true
+  output_path: outputs/audit/banking77_audit.jsonl
+  wwkg_enabled: false
+  promotion_output_path: outputs/audit/banking77_promotions.jsonl
+data:
+  train_path: examples/banking77_customer_support_records_train.jsonl
+  eval_path: examples/banking77_customer_support_records_eval.jsonl
+ablation:
+  cases_path: examples/banking77_ablation_cases.jsonl
+  output_path: outputs/banking77_ablation_report.json

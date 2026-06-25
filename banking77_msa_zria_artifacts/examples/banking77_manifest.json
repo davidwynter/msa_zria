@@ -1,0 +1,24 @@
+{
+  "branch": "banking77-benchmark",
+  "counts": {
+    "ablation_cases": 3,
+    "customer_support_cases": 12,
+    "customer_support_records_eval": 9,
+    "customer_support_records_train": 27,
+    "zria_examples_eval": 3,
+    "zria_examples_train": 9,
+    "zria_rules": 1
+  },
+  "dataset": "BANKING77",
+  "files": {
+    "banking77_ablation_cases.jsonl": "d082dec84f560c7a6c8ac30ea7bdd4e1eb5b5bf04b296d2ffe25c82477ebb342",
+    "banking77_customer_support_cases.jsonl": "bf1b6d91a043c75e7f1fb531db6cae65c4cc9d786d032aab2cd2aa94f18e6038",
+    "banking77_customer_support_records_eval.jsonl": "6493e3a6dec36ba4fdd4961193b9c967ee436d853b2140a7766b4bae4262d2e3",
+    "banking77_customer_support_records_train.jsonl": "8c28e36bc4fe75e8c173d30830a74f0aad9b96a71fa1bd6747729d76545a4e98",
+    "banking77_zria_examples_eval.jsonl": "252a434c5ba1578a3816e36d1ee3399a18b56a104c040e07e0989fb77791ac15",
+    "banking77_zria_examples_train.jsonl": "130e9868b6bf3f26bca5a0dc606b71a7155863924b13be28e84fd17b59e89241",
+    "banking77_zria_rules.json": "b3ac71ef1527e29d20afc7bcce3e7dbe7a2b422d636ba0e8f467127159625ad4"
+  },
+  "mode": "smoke",
+  "workspace": "urn:wwkg:workspace:banking77"
+}

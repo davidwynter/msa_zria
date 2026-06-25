@@ -64,6 +64,47 @@ class _EvalModule:
         }
 
 
+class _ThinkingParseModule:
+    def __call__(self, text: str, kg_context=None):
+        return {
+            "parsed_result": {
+                "task": "parse",
+                "device": "thinking-monitor",
+                "issue": "policy exception review",
+                "cause": "multi_step_reasoning",
+                "severity": "high",
+            }
+        }
+
+
+class _ThinkingCodeModule:
+    def __call__(self, parsed, kg_context=None):
+        return {
+            "code_str": {
+                "task": "code",
+                "language": "python",
+                "framework": "pyro",
+                "entrypoint": "run_inference",
+                "query_variable": "thinking_path",
+                "required_statements": ["def run_inference"],
+                "program": "def run_inference():\n    return {'branch': 'thinking', 'resolved': True, 'should_escalate': False}\n",
+            }
+        }
+
+
+class _ThinkingEvalModule:
+    def __call__(self, query, answer, kg_context=None):
+        return {
+            "evaluation": {
+                "task": "evaluate",
+                "verdict": "resolved",
+                "resolved": True,
+                "should_escalate": False,
+                "explanation": f"thinking:{answer}",
+            }
+        }
+
+
 class _UnsafeCodeModule:
     def __call__(self, parsed, kg_context=None):
         return {
@@ -134,6 +175,35 @@ class APIIntegrationTest(unittest.TestCase):
         payload = response.json()
         self.assertTrue(payload["pyro_result"]["success"])
         self.assertTrue(payload["pyro_result"]["answer"]["resolved"])
+
+    def test_infer_uses_requested_reasoning_branch(self) -> None:
+        app = create_app(
+            parse_module=_ParseModule(),
+            code_module=_CodeModule(),
+            eval_module=_EvalModule(),
+            thinking_parse_module=_ThinkingParseModule(),
+            thinking_code_module=_ThinkingCodeModule(),
+            thinking_eval_module=_ThinkingEvalModule(),
+            zria_adapter=RuleBasedZRIAAdapter.from_rules_path(
+                Path(__file__).resolve().parents[1] / "examples" / "zria_rules.json"
+            ),
+            initialize_ray=False,
+        )
+        client = TestClient(app)
+
+        response = client.post(
+            "/infer",
+            json={
+                "query": "Need the deeper reasoning path.",
+                "mode": "pyro",
+                "reasoning_branch": "thinking",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["reasoning_branch"], "thinking")
+        self.assertEqual(payload["pyro_result"]["answer"]["branch"], "thinking")
 
     def test_produce_dataset_writes_branch_aware_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

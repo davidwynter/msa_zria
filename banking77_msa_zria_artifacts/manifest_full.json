@@ -1,0 +1,25 @@
+{
+  "artifact_pack": "banking77_msa_zria_artifacts",
+  "created_for": "msa_zria PRODUCTION_PIPELINE.md",
+  "dataset": "BANKING77",
+  "file_count": 16,
+  "files": {
+    "Makefile": "f0ca9c304d54ead0684db506466be8f2cd160f6184e059a62ba3076f1c1ce534",
+    "README_Banking77_MSA_ZRIA.md": "85e2e93d7e2530dd8d8bdbe3583444b1ec60138eec95c018ec44cf325623fba5",
+    "configs/gemma4_12b_banking77.yaml": "408276e5075dad18644800d2a749d398af6724b2dc996dc057f956cf2e5e5217",
+    "configs/gemma4_12b_banking77_a770.yaml": "ea443145500ea72aa0e6315d6c20331186ca23335ad61be7f6130e74fd77f01b",
+    "configs/gemma4_12b_banking77_v100.yaml": "00cd0fd36656b41025c58be9113138b81851a50e6b0e2da558689b770e495253",
+    "docs/DATASET_CARD.md": "a304ec34820379e05f7ebfa533a3cb5143ad6601c04cf6592958e88c7a9d88be",
+    "examples/banking77_ablation_cases.jsonl": "d082dec84f560c7a6c8ac30ea7bdd4e1eb5b5bf04b296d2ffe25c82477ebb342",
+    "examples/banking77_customer_support_cases.jsonl": "bf1b6d91a043c75e7f1fb531db6cae65c4cc9d786d032aab2cd2aa94f18e6038",
+    "examples/banking77_customer_support_records_eval.jsonl": "6493e3a6dec36ba4fdd4961193b9c967ee436d853b2140a7766b4bae4262d2e3",
+    "examples/banking77_customer_support_records_train.jsonl": "8c28e36bc4fe75e8c173d30830a74f0aad9b96a71fa1bd6747729d76545a4e98",
+    "examples/banking77_manifest.json": "721377df23d6e11b1134628c962d65f9f6cbefa869cb4543c75afe7783837696",
+    "examples/banking77_zria_examples_eval.jsonl": "252a434c5ba1578a3816e36d1ee3399a18b56a104c040e07e0989fb77791ac15",
+    "examples/banking77_zria_examples_train.jsonl": "130e9868b6bf3f26bca5a0dc606b71a7155863924b13be28e84fd17b59e89241",
+    "examples/banking77_zria_rules.json": "b3ac71ef1527e29d20afc7bcce3e7dbe7a2b422d636ba0e8f467127159625ad4",
+    "scripts/build_banking77_artifacts.py": "43e126b47a5baa7f7e0fb92e844547b9c8d580af35757c365f34c96adb6c1b65",
+    "scripts/validate_banking77_artifacts.py": "7689f7dde783e6972b3e7effd23930fb6c13d75f54d5b883864397def9c1fb09"
+  },
+  "smoke_corpus_note": "Bundled examples are synthetic offline smoke-test rows; run scripts/build_banking77_artifacts.py --mode hf to generate real BANKING77-derived artifacts."
+}

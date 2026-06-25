@@ -1,0 +1,200 @@
+{
+  "default_outcome": {
+    "explanation": "No BANKING77 intent rule matched this case.",
+    "resolved": false,
+    "should_escalate": false,
+    "task": "evaluate",
+    "verdict": "insufficient_information"
+  },
+  "rules": [
+    {
+      "branch": "banking77-benchmark",
+      "keywords": [
+        "beneficiary",
+        "activation"
+      ],
+      "outcome": {
+        "explanation": "beneficiary_activation can be handled through the standard banking support workflow.",
+        "resolved": true,
+        "should_escalate": false,
+        "task": "evaluate",
+        "verdict": "resolved"
+      },
+      "rule_id": "banking77-beneficiary-activation"
+    },
+    {
+      "branch": "banking77-benchmark",
+      "keywords": [
+        "beneficiary",
+        "not",
+        "verified"
+      ],
+      "outcome": {
+        "explanation": "beneficiary_not_verified can be handled through the standard banking support workflow.",
+        "resolved": true,
+        "should_escalate": false,
+        "task": "evaluate",
+        "verdict": "resolved"
+      },
+      "rule_id": "banking77-beneficiary-not-verified"
+    },
+    {
+      "branch": "banking77-benchmark",
+      "keywords": [
+        "card",
+        "acceptance"
+      ],
+      "outcome": {
+        "explanation": "card_acceptance is treated as a risk or exception case and should be escalated for controlled handling.",
+        "resolved": false,
+        "should_escalate": true,
+        "task": "evaluate",
+        "verdict": "escalate"
+      },
+      "rule_id": "banking77-card-acceptance"
+    },
+    {
+      "branch": "banking77-benchmark",
+      "keywords": [
+        "card",
+        "arrival"
+      ],
+      "outcome": {
+        "explanation": "card_arrival can be handled through the standard banking support workflow.",
+        "resolved": true,
+        "should_escalate": false,
+        "task": "evaluate",
+        "verdict": "resolved"
+      },
+      "rule_id": "banking77-card-arrival"
+    },
+    {
+      "branch": "banking77-benchmark",
+      "keywords": [
+        "cash",
+        "withdrawal"
+      ],
+      "outcome": {
+        "explanation": "cash_withdrawal can be handled through the standard banking support workflow.",
+        "resolved": true,
+        "should_escalate": false,
+        "task": "evaluate",
+        "verdict": "resolved"
+      },
+      "rule_id": "banking77-cash-withdrawal"
+    },
+    {
+      "branch": "banking77-benchmark",
+      "keywords": [
+        "cash",
+        "withdrawal",
+        "card"
+      ],
+      "outcome": {
+        "explanation": "cash_withdrawal_card is treated as a risk or exception case and should be escalated for controlled handling.",
+        "resolved": false,
+        "should_escalate": true,
+        "task": "evaluate",
+        "verdict": "escalate"
+      },
+      "rule_id": "banking77-cash-withdrawal-card"
+    },
+    {
+      "branch": "banking77-benchmark",
+      "keywords": [
+        "cash",
+        "withdrawal",
+        "cash"
+      ],
+      "outcome": {
+        "explanation": "cash_withdrawal_cash can be handled through the standard banking support workflow.",
+        "resolved": true,
+        "should_escalate": false,
+        "task": "evaluate",
+        "verdict": "resolved"
+      },
+      "rule_id": "banking77-cash-withdrawal-cash"
+    },
+    {
+      "branch": "banking77-benchmark",
+      "keywords": [
+        "cash",
+        "withdrawal",
+        "charge"
+      ],
+      "outcome": {
+        "explanation": "cash_withdrawal_charge is treated as a risk or exception case and should be escalated for controlled handling.",
+        "resolved": false,
+        "should_escalate": true,
+        "task": "evaluate",
+        "verdict": "escalate"
+      },
+      "rule_id": "banking77-cash-withdrawal-charge"
+    },
+    {
+      "branch": "banking77-benchmark",
+      "keywords": [
+        "cash",
+        "withdrawal",
+        "limit"
+      ],
+      "outcome": {
+        "explanation": "cash_withdrawal_limit can be handled through the standard banking support workflow.",
+        "resolved": true,
+        "should_escalate": false,
+        "task": "evaluate",
+        "verdict": "resolved"
+      },
+      "rule_id": "banking77-cash-withdrawal-limit"
+    },
+    {
+      "branch": "banking77-benchmark",
+      "keywords": [
+        "cash",
+        "withdrawal",
+        "pending"
+      ],
+      "outcome": {
+        "explanation": "cash_withdrawal_pending can be handled through the standard banking support workflow.",
+        "resolved": true,
+        "should_escalate": false,
+        "task": "evaluate",
+        "verdict": "resolved"
+      },
+      "rule_id": "banking77-cash-withdrawal-pending"
+    },
+    {
+      "branch": "banking77-benchmark",
+      "keywords": [
+        "cash",
+        "withdrawal",
+        "statement"
+      ],
+      "outcome": {
+        "explanation": "cash_withdrawal_statement can be handled through the standard banking support workflow.",
+        "resolved": true,
+        "should_escalate": false,
+        "task": "evaluate",
+        "verdict": "resolved"
+      },
+      "rule_id": "banking77-cash-withdrawal-statement"
+    },
+    {
+      "branch": "banking77-benchmark",
+      "keywords": [
+        "cash",
+        "withdrawal",
+        "verify"
+      ],
+      "outcome": {
+        "explanation": "cash_withdrawal_verify is treated as a risk or exception case and should be escalated for controlled handling.",
+        "resolved": false,
+        "should_escalate": true,
+        "task": "evaluate",
+        "verdict": "escalate"
+      },
+      "rule_id": "banking77-cash-withdrawal-verify"
+    }
+  ],
+  "version": "1"
+}

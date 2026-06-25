@@ -392,6 +392,49 @@ Run supervised fine-tuning with the canonical JSONL records:
 python -m msa_zria.train --config configs/gemma4_12b.yaml
 ```
 
+Build the specialist thinking-branch dataset from richer source cases:
+
+```bash
+msa-zria thinking-ingest \
+  --input examples/thinking_cases_train.jsonl \
+  --output examples/thinking_records_train.jsonl
+```
+
+Fine-tune the specialist thinking model:
+
+```bash
+python -m msa_zria.train --config configs/gemma4_12b_thinking.yaml
+```
+
+List the configured runtime reasoning branches:
+
+```bash
+msa-zria branches
+```
+
+Run one request through the default `non_thinking` branch:
+
+```bash
+msa-zria infer \
+  --query "The monitor failed after the box was opened." \
+  --mode zria \
+  --reasoning-branch non_thinking
+```
+
+Run one request through the `thinking` branch after configuring `LM_PATH_THINKING`:
+
+```bash
+LM_PATH_THINKING=outputs/gemma4_12b_thinking \
+msa-zria infer \
+  --query "The monitor failed after the box was opened." \
+  --mode pyro \
+  --reasoning-branch thinking \
+  --kg-workspace urn:wwkg:workspace:example \
+  --kg-branch policy-review
+```
+
+The `thinking` branch uses specialist prompts and should point at a model trained on `thinking_records_*.jsonl`, not the baseline customer-support records.
+
 Run the baseline ablation harness and write a JSON report:
 
 ```bash

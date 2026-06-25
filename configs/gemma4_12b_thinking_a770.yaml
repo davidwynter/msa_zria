@@ -1,0 +1,45 @@
+experiment_name: msa-zria-gemma4-12b-thinking-a770
+seed: 42
+
+kg:
+  backend: wwkg
+  base_url: http://127.0.0.1:4242
+  workspace: urn:wwkg:workspace:example
+  branch: main
+
+zria:
+  backend: rules
+  rules_path: examples/zria_rules.json
+
+data:
+  train_path: examples/thinking_records_train.jsonl
+  eval_path: examples/thinking_records_eval.jsonl
+
+model:
+  base_model_id: google/gemma-4-12B
+  processor_id: google/gemma-4-12B-it
+  load_in_4bit: true
+  use_double_quant: true
+  quant_type: nf4
+  prepare_for_kbit_training: true
+
+training:
+  output_dir: outputs/gemma4_12b_thinking_a770
+  accelerator: xpu
+  learning_rate: 1.5e-4
+  num_train_epochs: 4
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 16
+  max_length: 2048
+  logging_steps: 10
+  save_strategy: epoch
+  eval_strategy: epoch
+  lora_r: 16
+  lora_alpha: 16
+  lora_dropout: 0.05
+  gradient_checkpointing: true
+
+ablation:
+  cases_path: examples/ablation_cases.jsonl
+  output_path: outputs/ablation_report_thinking_a770.json

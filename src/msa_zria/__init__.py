@@ -39,6 +39,12 @@ from msa_zria.ingest import (
 from msa_zria.kg import kg_context_metadata, load_triples, retrieve_neighborhood
 from msa_zria.pyro_runtime import PyroExecutionResult, execute_pyro_program
 from msa_zria.reasoning_pipeline import PipelineResult, ReasoningPipeline
+from msa_zria.runtime import (
+    ReasoningBranch,
+    available_reasoning_branches,
+    build_runtime_dependencies,
+    infer,
+)
 from msa_zria.validate_contracts import ContractValidationDetail, ContractValidationReport, ContractValidationSummary, validate_contracts
 from msa_zria.zria import (
     ZRIAComparisonDetail,
@@ -113,6 +119,7 @@ __all__ = [
     "ParseTarget",
     "PipelineResult",
     "PyroExecutionResult",
+    "ReasoningBranch",
     "ReasoningPipeline",
     "StructuredTrainingExample",
     "TrainingExample",
@@ -133,6 +140,8 @@ __all__ = [
     "evaluate_case",
     "evaluate_learned_backend",
     "execute_pyro_program",
+    "available_reasoning_branches",
+    "build_runtime_dependencies",
     "ingest_customer_support_cases",
     "kg_context_metadata",
     "load_ablation_cases",
@@ -144,6 +153,7 @@ __all__ = [
     "load_zria_backend",
     "retrieve_neighborhood",
     "run_ablation",
+    "infer",
     "run_sweep",
     "sha256_directory",
     "sha256_file",

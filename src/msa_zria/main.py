@@ -1,20 +1,32 @@
 from __future__ import annotations
 
-import inspect
 import json
 import os
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from msa_zria.audit import AuditRecorder
-from msa_zria.config import KGConfig, KGScope, ZRIAConfig, load_experiment_config
-from msa_zria.data import CodeTarget, EvaluationCase, EvaluationResult, EvaluationTarget, ParseTarget, evaluate_case
-from msa_zria.kg import kg_context_metadata, load_triples
-from msa_zria.pyro_runtime import execute_pyro_program
-from msa_zria.zria_adapter import BaseZRIAAdapter, ConfiguredZRIAAdapter
+from msa_zria.config import KGConfig, KGScope
+from msa_zria.data import EvaluationCase, EvaluationResult, evaluate_case
+from msa_zria.kg import load_triples
+from msa_zria.runtime import (
+    BranchConfigurationError,
+    evaluate_answer,
+    InferenceExecutionError,
+    InferenceMode,
+    InferenceModuleNotConfiguredError,
+    ReasoningBranch,
+    UnsupportedModeError,
+    build_runtime_dependencies,
+    infer as run_inference,
+    parse_query,
+    row_metadata,
+    run_pyro as run_pyro_reasoning,
+    synthesize_code,
+)
+from msa_zria.zria_adapter import BaseZRIAAdapter
 
 
 class DatasetConfig(BaseModel):
@@ -50,9 +62,10 @@ class InferenceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str
-    mode: str
+    mode: InferenceMode
     kg_scope: KGScope | None = None
     operator_override: dict[str, Any] | None = None
+    reasoning_branch: ReasoningBranch = "non_thinking"
 
 
 class ParseRequest(BaseModel):
@@ -60,6 +73,7 @@ class ParseRequest(BaseModel):
 
     text: str
     kg_scope: KGScope | None = None
+    reasoning_branch: ReasoningBranch = "non_thinking"
 
 
 class CodeGenRequest(BaseModel):
@@ -67,6 +81,7 @@ class CodeGenRequest(BaseModel):
 
     parsed: dict[str, Any]
     kg_scope: KGScope | None = None
+    reasoning_branch: ReasoningBranch = "non_thinking"
 
 
 class EvalRequest(BaseModel):
@@ -75,6 +90,7 @@ class EvalRequest(BaseModel):
     query: str
     answer: Any
     kg_scope: KGScope | None = None
+    reasoning_branch: ReasoningBranch = "non_thinking"
 
 
 class ContractEvalRequest(BaseModel):
@@ -83,66 +99,12 @@ class ContractEvalRequest(BaseModel):
     case: EvaluationCase
 
 
-def _row_metadata(scope: KGScope | KGConfig | None) -> dict[str, str]:
-    return kg_context_metadata(scope)
-
-
-def _call_module(module: Any, kg_scope: KGScope | None, **kwargs: Any) -> Any:
-    if module is None:
-        raise HTTPException(status_code=503, detail="Inference module is not configured.")
-    try:
-        signature = inspect.signature(module)
-    except (TypeError, ValueError):
-        signature = None
-    if signature and "kg_context" in signature.parameters and kg_scope is not None:
-        kwargs["kg_context"] = kg_scope.model_dump(exclude_none=True)
-    try:
-        return module(**kwargs)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Module execution error: {exc}") from exc
-
-
-def _extract_payload(result: Any, key: str) -> Any:
-    if isinstance(result, dict) and key in result:
-        return result[key]
-    return result
-
-
-def _coerce_code_target(result: Any) -> CodeTarget:
-    payload = _extract_payload(result, "code_str")
-    if isinstance(payload, str):
-        return CodeTarget(program=payload)
-    return CodeTarget.model_validate(payload)
-
-
-def _default_zria_adapter() -> BaseZRIAAdapter:
-    config_path = os.getenv("MSA_ZRIA_CONFIG")
-    if config_path and Path(config_path).exists():
-        experiment_config = load_experiment_config(config_path)
-        return ConfiguredZRIAAdapter.from_config(experiment_config.zria, experiment_config.kg)
-    return ConfiguredZRIAAdapter.from_config(ZRIAConfig())
-
-
-def _default_audit_recorder() -> AuditRecorder | None:
-    config_path = os.getenv("MSA_ZRIA_CONFIG")
-    if config_path and Path(config_path).exists():
-        experiment_config = load_experiment_config(config_path)
-        return AuditRecorder.from_experiment(experiment_config)
-    return None
-
-
-def _default_modules() -> tuple[Any | None, Any | None, Any | None]:
-    try:
-        import dspy
-        from msa_zria.dspy_modules import CodeGenModule, EvalModule, ParseModule
-    except ModuleNotFoundError:
-        return None, None, None
-
-    lm_path = os.getenv("LM_PATH", "outputs/gemma4_12b")
-    llm = dspy.LM(model=lm_path)
-    return ParseModule(llm=llm), CodeGenModule(llm=llm), EvalModule(llm=llm)
+def _raise_runtime_http_error(exc: Exception) -> None:
+    if isinstance(exc, (BranchConfigurationError, InferenceModuleNotConfiguredError)):
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if isinstance(exc, InferenceExecutionError):
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    raise exc
 
 
 def create_app(
@@ -150,21 +112,13 @@ def create_app(
     parse_module: Any | None = None,
     code_module: Any | None = None,
     eval_module: Any | None = None,
+    thinking_parse_module: Any | None = None,
+    thinking_code_module: Any | None = None,
+    thinking_eval_module: Any | None = None,
     zria_adapter: BaseZRIAAdapter | None = None,
     audit_recorder: AuditRecorder | None = None,
     initialize_ray: bool = True,
 ) -> FastAPI:
-    if parse_module is None or code_module is None or eval_module is None:
-        default_parse, default_code, default_eval = _default_modules()
-        parse_module = parse_module or default_parse
-        code_module = code_module or default_code
-        eval_module = eval_module or default_eval
-
-    if zria_adapter is None:
-        zria_adapter = _default_zria_adapter()
-    if audit_recorder is None:
-        audit_recorder = _default_audit_recorder()
-
     if initialize_ray:
         try:
             import ray
@@ -174,37 +128,23 @@ def create_app(
         except ModuleNotFoundError:
             pass
 
+    runtime = build_runtime_dependencies(
+        parse_module=parse_module,
+        code_module=code_module,
+        eval_module=eval_module,
+        thinking_parse_module=thinking_parse_module,
+        thinking_code_module=thinking_code_module,
+        thinking_eval_module=thinking_eval_module,
+        zria_adapter=zria_adapter,
+        audit_recorder=audit_recorder,
+    )
     app = FastAPI(title="MSA Reasoning Service")
-
-    def _audit_control_events(control_events: list[dict[str, Any]], kg_scope: KGScope | None) -> None:
-        if audit_recorder is None:
-            return
-        for event in control_events:
-            audit_recorder.record_control_event(
-                control_type=event.get("control_type", "unknown_control"),
-                backend_type=event.get("backend_type"),
-                details=event.get("details", {}),
-                kg_scope=kg_scope,
-            )
-
-    def _evaluate_final(query: str, answer: Any, kg_scope: KGScope | None) -> EvaluationTarget:
-        if isinstance(answer, EvaluationTarget):
-            return answer
-        if eval_module is None:
-            return EvaluationTarget(
-                verdict="insufficient_information",
-                resolved=False,
-                should_escalate=False,
-                explanation="Evaluation module was not configured.",
-            )
-        result = _call_module(eval_module, kg_scope, query=query, answer=answer)
-        return EvaluationTarget.model_validate(_extract_payload(result, "evaluation"))
 
     @app.post("/produce_dataset")
     def produce_dataset(cfg: DatasetConfig) -> dict[str, Any]:
         kg = cfg.resolved_kg()
         triples = load_triples(kg)
-        metadata = _row_metadata(kg)
+        metadata = row_metadata(kg)
         os.makedirs(cfg.output_path, exist_ok=True)
 
         if cfg.format in ["triples", "hybrid"]:
@@ -229,25 +169,67 @@ def create_app(
 
     @app.post("/parse")
     def parse(req: ParseRequest) -> dict[str, Any]:
-        result = _call_module(parse_module, req.kg_scope, text=req.text)
-        return {"parsed": _extract_payload(result, "parsed_result"), "kg_scope": _row_metadata(req.kg_scope)}
+        try:
+            parsed = parse_query(
+                runtime,
+                req.text,
+                kg_scope=req.kg_scope,
+                reasoning_branch=req.reasoning_branch,
+            )
+        except Exception as exc:
+            _raise_runtime_http_error(exc)
+        return {
+            "parsed": parsed.model_dump(mode="json"),
+            "kg_scope": row_metadata(req.kg_scope),
+            "reasoning_branch": req.reasoning_branch,
+        }
 
     @app.post("/code_synthesis")
     def code_synthesis(req: CodeGenRequest) -> dict[str, Any]:
-        result = _call_module(code_module, req.kg_scope, parsed=req.parsed)
-        return {"code": _extract_payload(result, "code_str"), "kg_scope": _row_metadata(req.kg_scope)}
+        try:
+            code_target = synthesize_code(
+                runtime,
+                req.parsed,
+                kg_scope=req.kg_scope,
+                reasoning_branch=req.reasoning_branch,
+            )
+        except Exception as exc:
+            _raise_runtime_http_error(exc)
+        return {
+            "code": code_target.model_dump(mode="json"),
+            "kg_scope": row_metadata(req.kg_scope),
+            "reasoning_branch": req.reasoning_branch,
+        }
 
     @app.post("/run_pyro")
-    def run_pyro(req: CodeGenRequest) -> dict[str, Any]:
-        code_target = _coerce_code_target(_call_module(code_module, req.kg_scope, parsed=req.parsed))
-        result = execute_pyro_program(code_target.program, entrypoint=code_target.entrypoint)
-        _audit_control_events(result.control_events, req.kg_scope)
-        return {"pyro_result": result.model_dump(), "kg_scope": _row_metadata(req.kg_scope)}
+    def run_pyro_endpoint(req: CodeGenRequest) -> dict[str, Any]:
+        try:
+            return run_pyro_reasoning(
+                runtime,
+                req.parsed,
+                kg_scope=req.kg_scope,
+                reasoning_branch=req.reasoning_branch,
+            )
+        except Exception as exc:
+            _raise_runtime_http_error(exc)
 
     @app.post("/evaluate")
     def evaluate(req: EvalRequest) -> dict[str, Any]:
-        result = _call_module(eval_module, req.kg_scope, query=req.query, answer=req.answer)
-        return {"evaluation": _extract_payload(result, "evaluation"), "kg_scope": _row_metadata(req.kg_scope)}
+        try:
+            evaluation = evaluate_answer(
+                runtime,
+                req.query,
+                req.answer,
+                kg_scope=req.kg_scope,
+                reasoning_branch=req.reasoning_branch,
+            )
+        except Exception as exc:
+            _raise_runtime_http_error(exc)
+        return {
+            "evaluation": evaluation.model_dump(mode="json"),
+            "kg_scope": row_metadata(req.kg_scope),
+            "reasoning_branch": req.reasoning_branch,
+        }
 
     @app.post("/evaluate_contract")
     def evaluate_contract(req: ContractEvalRequest) -> dict[str, Any]:
@@ -256,83 +238,19 @@ def create_app(
 
     @app.post("/infer")
     def inference(req: InferenceRequest) -> dict[str, Any]:
-        parsed_payload = _extract_payload(_call_module(parse_module, req.kg_scope, text=req.query), "parsed_result")
-        parsed = ParseTarget.model_validate(parsed_payload)
-        if req.mode == "pyro":
-            pyro_response = run_pyro(CodeGenRequest(parsed=parsed.model_dump(), kg_scope=req.kg_scope))
-            final_evaluation = _evaluate_final(req.query, pyro_response["pyro_result"].get("answer"), req.kg_scope)
-            if audit_recorder is not None:
-                audit_recorder.record_decision_lineage(
-                    query=req.query,
-                    parsed_state=parsed,
-                    backend_used="pyro",
-                    fallback_fired=False,
-                    final_evaluation=final_evaluation,
-                    operator_override=req.operator_override,
-                    kg_scope=req.kg_scope,
-                )
-            return pyro_response
-        if req.mode == "zria":
-            trace = zria_adapter.predict_with_trace(
+        try:
+            return run_inference(
+                runtime,
                 req.query,
-                parsed=parsed,
+                mode=req.mode,
                 kg_scope=req.kg_scope,
+                operator_override=req.operator_override,
+                reasoning_branch=req.reasoning_branch,
             )
-            if audit_recorder is not None:
-                audit_recorder.record_decision_lineage(
-                    query=req.query,
-                    parsed_state=parsed,
-                    backend_used=trace.effective_backend,
-                    fallback_fired=trace.fallback_fired,
-                    final_evaluation=trace.prediction,
-                    operator_override=req.operator_override,
-                    kg_scope=req.kg_scope,
-                )
-                if trace.fallback_fired:
-                    details = {"fallback_reason": trace.fallback_reason}
-                    if trace.confidence is not None:
-                        details["confidence"] = trace.confidence
-                    audit_recorder.record_control_event(
-                        control_type=trace.control_event_type or "zria_fallback",
-                        backend_type=trace.configured_backend,
-                        details=details,
-                        kg_scope=req.kg_scope,
-                    )
-            return {"answer": trace.prediction.model_dump(), "kg_scope": _row_metadata(req.kg_scope)}
-        if req.mode == "hybrid":
-            zria_trace = zria_adapter.predict_with_trace(req.query, parsed=parsed, kg_scope=req.kg_scope)
-            pyro_response = run_pyro(CodeGenRequest(parsed=parsed.model_dump(), kg_scope=req.kg_scope))
-            pyro_result = pyro_response["pyro_result"]
-            chosen_backend = "pyro"
-            if pyro_result.get("success"):
-                final_evaluation = _evaluate_final(req.query, pyro_result.get("answer"), req.kg_scope)
-                response = {"answer": pyro_result["answer"], "kg_scope": _row_metadata(req.kg_scope)}
-            else:
-                chosen_backend = zria_trace.effective_backend
-                final_evaluation = zria_trace.prediction
-                response = {"answer": zria_trace.prediction.model_dump(), "kg_scope": _row_metadata(req.kg_scope)}
-            if audit_recorder is not None:
-                audit_recorder.record_decision_lineage(
-                    query=req.query,
-                    parsed_state=parsed,
-                    backend_used=chosen_backend,
-                    fallback_fired=zria_trace.fallback_fired or not pyro_result.get("success"),
-                    final_evaluation=final_evaluation,
-                    operator_override=req.operator_override,
-                    kg_scope=req.kg_scope,
-                )
-                if zria_trace.fallback_fired:
-                    details = {"fallback_reason": zria_trace.fallback_reason}
-                    if zria_trace.confidence is not None:
-                        details["confidence"] = zria_trace.confidence
-                    audit_recorder.record_control_event(
-                        control_type=zria_trace.control_event_type or "zria_fallback",
-                        backend_type=zria_trace.configured_backend,
-                        details=details,
-                        kg_scope=req.kg_scope,
-                    )
-            return response
-        raise HTTPException(status_code=400, detail="Invalid mode")
+        except UnsupportedModeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            _raise_runtime_http_error(exc)
 
     @app.post("/fine_tune")
     def fine_tune_endpoint(cfg: FineTuneConfig) -> Any:
